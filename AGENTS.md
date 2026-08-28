@@ -1,0 +1,67 @@
+# Repository guide for agents
+
+This file applies to the entire repository. Read it before changing code, then read
+[`README.md`](README.md), [`docs/architecture.md`](docs/architecture.md),
+[`docs/development.md`](docs/development.md), and [`todo.md`](todo.md).
+
+## Product boundary
+
+`quota-usage` is a macOS-only Node.js CLI for ChatGPT Codex and Claude Code
+**subscription quota windows**. It is not an API billing, spend, token-cost, or
+API rate-limit tool. The binary is `usage`; the package is `quota-usage`.
+
+These invariants are settled:
+
+- Do not add a daemon, resident service, threshold, or `check` command.
+- High usage and reached limits never cause a failure exit code.
+- Preserve successful account results when another account fails.
+- Never read or expose credentials, OAuth tokens, API keys, Claude Keychain
+  secrets, Codex `auth.json`, Claude `.credentials.json`, or raw Claude terminal
+  captures.
+- Let the official vendor CLIs own login, refresh, and logout.
+- Track and clean up only processes and PTYs started by this program. Never
+  discover, attach to, or terminate unrelated provider processes.
+- Do not access a real account, live quota endpoint, Keychain, or real Claude
+  status-line setting in automated tests. A real-account smoke test requires
+  explicit user permission.
+
+## Working conventions
+
+- Runtime target: macOS, Node.js 22+, strict TypeScript, ESM.
+- Direct dependency versions are exact. Keep runtime dependencies small and
+  update `package-lock.json` with any dependency change.
+- Use `UsageError` and the stable error codes in `src/types.ts`; public error
+  details must be credential-safe.
+- Keep provider-specific behavior behind `ProviderAdapter`. Normalize at the
+  adapter boundary and keep rendering provider-neutral.
+- Treat configuration as user-editable: reject unknown fields with YAML paths,
+  validate the whole document, preserve comments when practical, and write
+  atomically with the required permissions.
+- Preserve the Claude default-state distinction. Unset default mode uses
+  `~/.claude` plus sibling `~/.claude.json`; explicitly setting
+  `CLAUDE_CONFIG_DIR=~/.claude` is a different isolated state.
+- Keep `dist/`, `coverage/`, `node_modules/`, logs, and tarballs out of Git.
+  `prepack` rebuilds `dist/`, and the package `files` allowlist ships it.
+
+## Before handing off a change
+
+Run the checks appropriate to the change. Before a release or broad provider,
+configuration, process, cache, or packaging change, run the complete sequence:
+
+```sh
+npm run format:check
+npm run lint
+npm run typecheck
+npm test
+npm run coverage
+npm run build
+npm pack --dry-run
+```
+
+Coverage must keep at least 80% branch coverage for configuration, selectors,
+cache handling, process cleanup, and each provider adapter. Tests must use temp
+directories, fake executables, protocol fixtures, and mocked PTYs.
+
+Commit generated lockfile changes, but do not commit generated build or coverage
+output. Keep commits focused and update the README, agent docs, and `todo.md` when
+behavior, architecture, compatibility, or planned work changes.

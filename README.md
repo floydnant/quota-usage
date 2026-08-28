@@ -307,6 +307,10 @@ Common fixes:
 
 ## Development
 
+New contributors and coding agents should start with [AGENTS.md](AGENTS.md), the
+[architecture guide](docs/architecture.md), the
+[development guide](docs/development.md), and the project [todo list](todo.md).
+
 ```sh
 npm ci
 npm run format:check
@@ -320,7 +324,7 @@ npm pack --dry-run
 
 Tests use temporary directories, protocol fixtures, fake vendor executables, and mocked PTYs. They do not touch real vendor state, credentials, Keychain, status-line settings, or live quota endpoints.
 
-Real-account verification is manual only and was not run while building this repository. With explicit permission, smoke test on disposable registrations by adding one account per provider, exercising default/cached/live/JSON output, running doctor, and removing the registrations. Claude setup changes its status-line configuration after a confirmation, and live checks read current subscription state.
+Real-account verification is manual only. Do not run it without explicit permission. When authorized, smoke test with deliberately selected registrations by exercising default/cached/live/JSON output, running doctor, and removing any temporary registrations. Claude setup changes its status-line configuration after a confirmation, and live checks read current subscription state.
 
 ## Roadmap
 
