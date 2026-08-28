@@ -1,0 +1,3 @@
+- [ ] faster claude usage loading, show stale cache value while its loading
+- [ ] show loading spinners
+- [ ] historical usage analytics
