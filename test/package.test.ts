@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, stat } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -30,6 +30,8 @@ describe('packed npm artifact', () => {
     expect(
       files.every((file) => /^(?:dist\/|README\.md$|LICENSE$|package\.json$)/.test(file)),
     ).toBe(true);
+    const builtCli = await stat(join(process.cwd(), 'dist', 'cli.js'));
+    expect(builtCli.mode & 0o111).not.toBe(0);
 
     const prefix = join(root, 'install');
     await execute(

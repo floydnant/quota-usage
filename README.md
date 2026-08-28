@@ -107,16 +107,16 @@ Durations accept values such as `10s`, `1m`, and `1.5m`. Defaults are 10 seconds
 
 ## Output
 
-Human output has one heading per account, one 20-character ASCII bar per active window, and shorter known durations first:
+Human output has one heading per account, one 20-character bar per active window, and shorter known durations first. Window labels and percentages align within each account. Fractional blocks keep low values such as 3% visible without rounding them to a full 5% cell:
 
 ```text
 Codex  personal  Plus  live
-  5h    [#####---------------]  24% used  resets in 2h 14m, 18:40
-  7d    [############--------]  61% used  resets in 4d 3h, Fri 19:00
+  5h  [████▊░░░░░░░░░░░░░░░]   24% used  resets in 2h 14m, 18:40
+  7d  [████████████▎░░░░░░░]   61% used  resets in 4d 3h, Fri 19:00
 
 Claude  work  Max  cached 4m ago
-  5h    [################----]  82% used  resets in 47m, 17:13
-  7d    [########------------]  39% used  resets in 3d 8h, Sat 00:26
+  5h  [████████████████▍░░░]   82% used  resets in 47m, 17:13
+  7d  [███████▊░░░░░░░░░░░░]   39% used  resets in 3d 8h, Sat 00:26
 ```
 
 Green is below 60% used, yellow is 60–79%, and red begins at 80%. `LIMIT REACHED` appears when the provider marks a window reached or usage reaches 100%. Stale data is yellow and expired or unavailable data is red. Output remains fully understandable without color. Unavailable accounts remain in sorted position and never get a fake zero bar.

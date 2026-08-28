@@ -15,8 +15,17 @@ function tint(text: string, color: keyof typeof ANSI, enabled: boolean): string 
 }
 
 export function quotaBar(usedPercent: number): string {
-  const used = Math.min(20, Math.max(0, Math.round(usedPercent / 5)));
-  return `[${'#'.repeat(used)}${'-'.repeat(20 - used)}]`;
+  const width = 20;
+  const partialBlocks = ['', '▏', '▎', '▍', '▌', '▋', '▊', '▉'];
+  const scaled = (Math.min(100, Math.max(0, usedPercent)) / 100) * width;
+  let full = Math.floor(scaled);
+  let partial = Math.round((scaled - full) * 8);
+  if (partial === 8) {
+    full += 1;
+    partial = 0;
+  }
+  const used = `${'█'.repeat(full)}${partialBlocks[partial] ?? ''}`;
+  return `[${used}${'░'.repeat(width - full - (partial > 0 ? 1 : 0))}]`;
 }
 
 function windowLabel(window: QuotaWindow): string {
@@ -84,7 +93,9 @@ export function renderHuman(
     if (result.status === 'unavailable' || !result.windows.length) {
       lines.push(`  ${tint(result.error?.message ?? 'Unavailable', 'red', color)}`);
     } else {
-      for (const window of [...result.windows].sort(windowOrder)) {
+      const windows = [...result.windows].sort(windowOrder);
+      const labelWidth = Math.max(...windows.map((window) => windowLabel(window).length));
+      for (const window of windows) {
         const percent = Math.round(window.usedPercent);
         const reached = window.reached || window.usedPercent >= 100;
         const barColor =
@@ -95,14 +106,14 @@ export function renderHuman(
               : 'green';
         const suffix = reached ? '  LIMIT REACHED' : '';
         lines.push(
-          `  ${windowLabel(window).padEnd(5)} ${tint(quotaBar(window.usedPercent), barColor, color)}  ${percent}% used  ${resetLabel(window, now)}${tint(suffix, 'red', color)}`,
+          `  ${windowLabel(window).padEnd(labelWidth)}  ${tint(quotaBar(window.usedPercent), barColor, color)}  ${String(percent).padStart(3)}% used  ${resetLabel(window, now)}${tint(suffix, 'red', color)}`,
         );
       }
       if (result.credits) {
         const details = [
           result.credits.available === undefined
             ? undefined
-            : `${result.credits.available} reset credits`,
+            : `${result.credits.available} reset ${result.credits.available === 1 ? 'credit' : 'credits'}`,
           result.credits.balance === undefined
             ? undefined
             : `${result.credits.balance}${result.credits.unit ? ` ${result.credits.unit}` : ''}`,

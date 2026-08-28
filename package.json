@@ -28,6 +28,7 @@
     "lint": "eslint .",
     "pack:check": "npm pack --dry-run",
     "precoverage": "npm run build",
+    "postbuild": "node -e \"require('node:fs').chmodSync('dist/cli.js', 0o755)\"",
     "prepack": "npm run clean && npm run build",
     "pretest": "npm run build",
     "test": "vitest run",

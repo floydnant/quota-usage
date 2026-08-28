@@ -31,9 +31,11 @@ const result: AccountResult = {
 };
 
 describe('rendering', () => {
-  it('draws fixed ASCII bars and sorts shorter windows first without color', () => {
-    expect(quotaBar(24)).toBe('[#####---------------]');
-    expect(quotaBar(100)).toBe('[####################]');
+  it('draws precise fixed-width bars and sorts shorter windows first without color', () => {
+    expect(quotaBar(0)).toBe('[░░░░░░░░░░░░░░░░░░░░]');
+    expect(quotaBar(3)).toBe('[▋░░░░░░░░░░░░░░░░░░░]');
+    expect(quotaBar(24)).toBe('[████▊░░░░░░░░░░░░░░░]');
+    expect(quotaBar(100)).toBe('[████████████████████]');
     const text = renderHuman([result], [], {
       color: 'never',
       now: new Date('2026-08-27T18:00:00Z'),
@@ -41,6 +43,29 @@ describe('rendering', () => {
     expect(text).not.toContain('\u001b[');
     expect(text.indexOf('5h')).toBeLessThan(text.indexOf('7d'));
     expect(text).toContain('24% used');
+  });
+
+  it('aligns bars and percentages within an account', () => {
+    const week = result.windows[0];
+    const session = result.windows[1];
+    if (!week || !session) throw new Error('fixture windows are missing');
+    const mixedLabels: AccountResult = {
+      ...result,
+      windows: [
+        { ...week, label: '7d', usedPercent: 9 },
+        { ...session, label: 'GPT-5.3-Codex-Spark', usedPercent: 100 },
+      ],
+    };
+    const lines = renderHuman([mixedLabels], [], {
+      color: 'never',
+      now: new Date('2026-08-27T18:00:00Z'),
+    }).split('\n');
+    const windowLines = lines.slice(1);
+    expect(windowLines).toHaveLength(2);
+    expect(windowLines.map((line) => line.indexOf('['))).toEqual([23, 23]);
+    expect(windowLines.map((line) => line.indexOf('% used'))).toEqual([50, 50]);
+    expect(windowLines.join('\n')).toContain('  9% used');
+    expect(windowLines.join('\n')).toContain('100% used');
   });
 
   it('uses thresholds, honors NO_COLOR, and labels reached limits', () => {
@@ -81,7 +106,7 @@ describe('rendering', () => {
     expect(text).toContain('Claude  x  unavailable');
     expect(text).not.toContain('unavailable 0s ago');
     expect(text).toContain('No cache');
-    expect(text).not.toContain('[--------------------]');
+    expect(text).not.toContain(quotaBar(0));
   });
 
   it('emits exactly one versioned JSON document with stable errors', () => {
