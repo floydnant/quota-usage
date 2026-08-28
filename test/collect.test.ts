@@ -88,7 +88,7 @@ describe('collection aggregation', () => {
     expect(summary.exitCode).toBe(1);
     expect(summary.results[0]).toMatchObject({
       status: 'cached',
-      warnings: ['live refresh failed'],
+      warnings: ['live refresh failed: Codex app-server exited unexpectedly'],
     });
     expect(summary.errors[0]?.code).toBe('provider_failure');
   });

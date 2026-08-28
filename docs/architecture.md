@@ -84,11 +84,13 @@ do not overwrite it. Return exact manual cleanup guidance instead.
 ### Claude live
 
 Live mode is experimental and sequential. A fresh `node-pty` runs the absolute
-Claude executable with `--ax-screen-reader`; `@xterm/headless` answers terminal
-capability queries and supplies user input. The parser uses semantic readiness
-and explicit alternate-screen detection, not a fixed startup sleep. First-run,
-login, trust, network, update, incomplete, and renamed screens are provider
-errors. Raw screen content is bounded in memory and never enters diagnostics.
+Claude executable from the user's home directory; `@xterm/headless` answers
+terminal capability queries, reconstructs the screen, and supplies user input.
+Claude does not persist trust for the home directory, so the adapter accepts that
+session-only prompt. The parser uses semantic readiness and explicit
+alternate-screen detection, not a fixed startup sleep. First-run, login, network,
+update, incomplete, and renamed screens are provider errors. Raw screen content
+is bounded in memory and never enters diagnostics.
 
 Two easy-to-miss compatibility details:
 

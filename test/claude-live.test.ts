@@ -1,5 +1,5 @@
 import { chmod, mkdir, mkdtemp, stat, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
@@ -74,7 +74,13 @@ describe('Claude live PTY flow', () => {
 
   it('waits semantically, sends /usage, exits, and tracks only its PTY', async () => {
     const child = new FakePty();
-    const module: PtyModule = { spawn: () => child };
+    const module: PtyModule = {
+      spawn: (_file, args, options) => {
+        expect(args).toEqual([]);
+        expect(options.cwd).toBe(homedir());
+        return child;
+      },
+    };
     const tracker = new ProcessTracker();
     const adapter = new ClaudeLiveAdapter('/bin/echo', tracker, module);
     adapter.version = async () => '2.1.238';
@@ -86,6 +92,42 @@ describe('Claude live PTY flow', () => {
     expect(child.writes).toContain('/usage\r');
     expect(child.writes).toContain('/exit\r');
     expect(tracker.size).toBe(0);
+  });
+
+  it('accepts the session-only home trust prompt before sending /usage', async () => {
+    const child = new FakePty();
+    child.onExit = (callback) => {
+      (child as unknown as { exit?: () => void }).exit = callback;
+      queueMicrotask(() =>
+        (child as unknown as { data?: (value: string) => void }).data?.(
+          'Do you trust the files in this folder?',
+        ),
+      );
+      return { dispose: () => undefined };
+    };
+    const originalWrite = child.write.bind(child);
+    child.write = (data) => {
+      child.writes.push(data);
+      if (data === '\u001b[A\r') {
+        queueMicrotask(() =>
+          (child as unknown as { data?: (value: string) => void }).data?.(
+            '\u001b[2J\u001b[HClaude Code Max\n❯',
+          ),
+        );
+      } else {
+        originalWrite(data);
+      }
+    };
+    const adapter = new ClaudeLiveAdapter('/bin/echo', new ProcessTracker(), {
+      spawn: () => child,
+    });
+    adapter.version = async () => '2.1.238';
+    await expect(adapter.collect(account, { timeoutMs: 2_000 })).resolves.toHaveProperty(
+      'status',
+      'live',
+    );
+    expect(child.writes).toContain('\u001b[A\r');
+    expect(child.writes).toContain('/usage\r');
   });
 
   it('answers terminal negotiation and rejects first-run setup explicitly', async () => {
@@ -181,7 +223,6 @@ describe('Claude live PTY flow', () => {
 
   it.each([
     ['Select login method:', 'official login setup'],
-    ['Do you trust this folder?', 'trust prompt'],
     ['Network error: unable to connect', 'network error'],
     ['Update available: new version is available', 'upgrade notice'],
   ])('reports the alternate provider screen %s', async (screen, message) => {

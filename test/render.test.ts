@@ -43,6 +43,7 @@ describe('rendering', () => {
     expect(text).not.toContain('\u001b[');
     expect(text.indexOf('5h')).toBeLessThan(text.indexOf('7d'));
     expect(text).toContain('24% used');
+    expect(text).toMatch(/resets .+ at \d{2}:\d{2} {2}\(in 4d\)/);
   });
 
   it('aligns bars and percentages within an account', () => {
@@ -84,6 +85,13 @@ describe('rendering', () => {
     expect(renderHuman([reached], [], { color: 'never', now: new Date() })).toContain(
       'LIMIT REACHED',
     );
+    expect(
+      renderHuman([result], [], {
+        color: 'always',
+        env: {},
+        now: new Date('2026-08-27T18:00:00Z'),
+      }),
+    ).toContain('\u001b[1mresets');
   });
 
   it('does not draw a fake unavailable bar', () => {

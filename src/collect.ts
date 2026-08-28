@@ -165,7 +165,7 @@ export async function collectUsage(request: CollectRequest): Promise<CollectionS
         if (cached.status !== 'expired') {
           return {
             ...cached,
-            warnings: [...(cached.warnings ?? []), 'live refresh failed'],
+            warnings: [...(cached.warnings ?? []), `live refresh failed: ${liveError.message}`],
             error: liveError,
           };
         }

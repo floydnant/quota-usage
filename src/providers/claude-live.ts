@@ -4,6 +4,7 @@ import { ProcessTracker, runProcess } from '../processes.js';
 import { constants } from 'node:fs';
 import { access, chmod, stat } from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type {
   AccountConfig,
@@ -108,9 +109,14 @@ interface TerminalDisposable {
 interface HeadlessTerminal {
   onData(callback: (data: string) => void): TerminalDisposable;
   onBinary(callback: (data: string) => void): TerminalDisposable;
-  write(data: string): void;
-  input(data: string, wasUserInput?: boolean): void;
+  write(data: string, callback?: () => void): void;
   dispose(): void;
+  readonly buffer: {
+    readonly active: {
+      readonly length: number;
+      getLine(index: number): { translateToString(trimRight?: boolean): string } | undefined;
+    };
+  };
 }
 
 type HeadlessTerminalConstructor = new (options: {
@@ -163,6 +169,15 @@ function safeUiSignals(value: string): string {
   ];
   const found = signals.filter(([, pattern]) => pattern.test(text)).map(([name]) => name);
   return found.length ? found.join(',') : 'none';
+}
+
+function terminalScreen(terminal: HeadlessTerminal): string {
+  const lines: string[] = [];
+  for (let index = 0; index < terminal.buffer.active.length; index += 1) {
+    const line = terminal.buffer.active.getLine(index)?.translateToString(true);
+    if (line) lines.push(line);
+  }
+  return lines.join('\n');
 }
 
 interface LocalDateParts {
@@ -447,10 +462,11 @@ export class ClaudeLiveAdapter implements ProviderAdapter {
     ))
       if (value !== undefined) env[key] = value;
     env.TERM = 'xterm-256color';
-    const child = pty.spawn(this.executable, ['--ax-screen-reader'], {
+    const cwd = homedir();
+    const child = pty.spawn(this.executable, [], {
       cols: 100,
       rows: 32,
-      cwd: process.cwd(),
+      cwd,
       env,
     });
     const terminal = new Terminal({
@@ -480,13 +496,17 @@ export class ClaudeLiveAdapter implements ProviderAdapter {
       exited,
     });
     let buffer = '';
+    let screen = '';
     let chunks = 0;
     let sawOutput = false;
     let sawReadiness = false;
+    let sawQuota = false;
     let sent = false;
     let sendTimer: NodeJS.Timeout | undefined;
+    let trustTimer: NodeJS.Timeout | undefined;
     let answeredBackgroundQuery = false;
     let answeredVersionQuery = false;
+    let acceptedSessionTrust = false;
     let rejectedProviderState = false;
     let rejectProviderState: ((error: UsageError) => void) | undefined;
     const providerState = new Promise<never>((_, reject) => {
@@ -496,23 +516,11 @@ export class ClaudeLiveAdapter implements ProviderAdapter {
     const ready = new Promise<void>((resolve) => {
       resolveReady = resolve;
     });
-    const dataListener = child.onData((data) => {
-      chunks += 1;
-      if (!sawOutput) {
-        sawOutput = true;
-        options.verbose?.(`claude:${account.label}: PTY produced output`);
-      }
-      buffer = `${buffer}${data}`.slice(-256 * 1024);
-      terminal.write(data);
-      if (!answeredBackgroundQuery && buffer.includes('\u001b]11;?')) {
-        answeredBackgroundQuery = true;
-        child.write('\u001b]11;rgb:0000/0000/0000\u001b\\');
-      }
-      if (!answeredVersionQuery && buffer.includes('\u001b[>0q')) {
-        answeredVersionQuery = true;
-        child.write('\u001bP>|xterm.js(6.0.0)\u001b\\');
-      }
-      const screen = cleanTerminal(buffer);
+    const inspectScreen = () => {
+      screen = terminalScreen(terminal);
+      const trustPromptVisible = /trust (?:this|the) (?:folder|directory)|do you trust/i.test(
+        screen,
+      );
       const rejectState = (message: string, code: 'logged_out_account' | 'provider_failure') => {
         if (rejectedProviderState) return;
         rejectedProviderState = true;
@@ -535,14 +543,22 @@ export class ClaudeLiveAdapter implements ProviderAdapter {
           `Claude account ${account.label} requires official login setup`,
           'logged_out_account',
         );
-      } else if (/trust (?:this|the) (?:folder|directory)|do you trust/i.test(screen)) {
-        rejectState('Claude displayed a workspace trust prompt', 'provider_failure');
+      } else if (!acceptedSessionTrust && trustPromptVisible) {
+        acceptedSessionTrust = true;
+        options.verbose?.(`claude:${account.label}: home-directory trust prompt detected`);
+        trustTimer = setTimeout(() => {
+          options.verbose?.(
+            `claude:${account.label}: accepting session-only home-directory trust prompt`,
+          );
+          buffer = '';
+          child.write('\u001b[A\r');
+        }, 400);
       } else if (/network error|connection (?:failed|error)|unable to connect/i.test(screen)) {
         rejectState('Claude reported a network error', 'provider_failure');
       } else if (/upgrade required|update available|new version (?:is )?available/i.test(screen)) {
         rejectState('Claude displayed an upgrade notice', 'provider_failure');
       }
-      if (!rejectedProviderState && !sent) {
+      if (!rejectedProviderState && !sent && !trustPromptVisible) {
         if (
           !sawReadiness &&
           /(?:type \/ for commands|what can i help|❯|claude code v\d)/i.test(screen)
@@ -555,16 +571,35 @@ export class ClaudeLiveAdapter implements ProviderAdapter {
           sendTimer = setTimeout(() => {
             sent = true;
             options.verbose?.(`claude:${account.label}: input settled; sending /usage`);
-            terminal.input('/usage\r');
+            child.write('/usage\r');
           }, 400);
         }
       }
       if (
         sent &&
-        /(?:current session|five.hour|5h|seven.day|weekly|plan usage)/i.test(cleanTerminal(buffer))
+        !sawQuota &&
+        /(?:current session|five.hour|5h|seven.day|weekly|plan usage)/i.test(screen)
       ) {
+        sawQuota = true;
         options.verbose?.(`claude:${account.label}: quota screen detected`);
         resolveReady?.();
+      }
+    };
+    const dataListener = child.onData((data) => {
+      chunks += 1;
+      if (!sawOutput) {
+        sawOutput = true;
+        options.verbose?.(`claude:${account.label}: PTY produced output`);
+      }
+      buffer = `${buffer}${data}`.slice(-256 * 1024);
+      terminal.write(data, inspectScreen);
+      if (!answeredBackgroundQuery && buffer.includes('\u001b]11;?')) {
+        answeredBackgroundQuery = true;
+        child.write('\u001b]11;rgb:0000/0000/0000\u001b\\');
+      }
+      if (!answeredVersionQuery && buffer.includes('\u001b[>0q')) {
+        answeredVersionQuery = true;
+        child.write('\u001bP>|xterm.js(6.0.0)\u001b\\');
       }
     });
     let timer: NodeJS.Timeout | undefined;
@@ -581,7 +616,7 @@ export class ClaudeLiveAdapter implements ProviderAdapter {
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
             options.verbose?.(
-              `claude:${account.label}: timeout phase=${sent ? 'waiting-for-usage' : sawReadiness ? 'waiting-for-input-settle' : sawOutput ? 'waiting-for-readiness' : 'waiting-for-output'} chunks=${chunks} bytes=${Buffer.byteLength(buffer)} uiSignals=${safeUiSignals(buffer)} elapsedMs=${Date.now() - startedAt}`,
+              `claude:${account.label}: timeout phase=${sent ? 'waiting-for-usage' : sawReadiness ? 'waiting-for-input-settle' : sawOutput ? 'waiting-for-readiness' : 'waiting-for-output'} chunks=${chunks} bytes=${Buffer.byteLength(buffer)} uiSignals=${safeUiSignals(screen || buffer)} elapsedMs=${Date.now() - startedAt}`,
             );
             reject(
               new UsageError('timeout', `Claude live check timed out for ${account.label}`, {
@@ -593,13 +628,18 @@ export class ClaudeLiveAdapter implements ProviderAdapter {
         }),
       ]);
       await new Promise((resolve) => setTimeout(resolve, 100));
-      return parseClaudeUsageScreen(buffer, account, options.now ?? new Date());
+      const usageScreen = (screen || buffer).replace(
+        /trust (?:this|the) (?:folder|directory)|do you trust/gi,
+        'trust accepted',
+      );
+      return parseClaudeUsageScreen(usageScreen, account, options.now ?? new Date());
     } finally {
       if (timer) clearTimeout(timer);
       if (sendTimer) clearTimeout(sendTimer);
-      terminal.input('\u001b');
+      if (trustTimer) clearTimeout(trustTimer);
+      child.write('\u001b');
       await new Promise((resolve) => setTimeout(resolve, 50));
-      terminal.input('/exit\r');
+      child.write('/exit\r');
       await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 300))]);
       const hasExited = (): boolean => didExit;
       if (!hasExited()) child.kill('SIGTERM');

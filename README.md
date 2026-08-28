@@ -112,14 +112,14 @@ Human output has one heading per account, one 20-character bar per active window
 ```text
 Codex  personal  Plus  live
   5h  [████▊░░░░░░░░░░░░░░░]   24% used  resets in 2h 14m, 18:40
-  7d  [████████████▎░░░░░░░]   61% used  resets in 4d 3h, Fri 19:00
+  7d  [████████████▎░░░░░░░]   61% used  resets Mon, Aug 31 at 23:00  (in 4d 3h)
 
 Claude  work  Max  cached 4m ago
   5h  [████████████████▍░░░]   82% used  resets in 47m, 17:13
-  7d  [███████▊░░░░░░░░░░░░]   39% used  resets in 3d 8h, Sat 00:26
+  7d  [███████▊░░░░░░░░░░░░]   39% used  resets Mon, Aug 31 at 04:00  (in 3d 8h)
 ```
 
-Green is below 60% used, yellow is 60–79%, and red begins at 80%. `LIMIT REACHED` appears when the provider marks a window reached or usage reaches 100%. Stale data is yellow and expired or unavailable data is red. Output remains fully understandable without color. Unavailable accounts remain in sorted position and never get a fake zero bar.
+Green is below 60% used, yellow is 60–79%, and red begins at 80%. `LIMIT REACHED` appears when the provider marks a window reached or usage reaches 100%. Reset dates three or more days away move before the countdown and appear bold in color output. Stale data is yellow and expired or unavailable data is red. Output remains fully understandable without color. Unavailable accounts remain in sorted position and never get a fake zero bar.
 
 Every cached result shows age. A reading becomes stale after 15 minutes. If every reported reset time has passed, it is expired and unusable. A provider that omits reset time remains usable, becomes stale after 15 minutes, and displays `reset unknown`.
 
@@ -216,7 +216,7 @@ See the official [Codex app-server protocol](https://learn.chatgpt.com/docs/app-
 
 ### Claude cached collector
 
-Claude Code's documented status-line JSON contains rolling subscription `rate_limits` after account activity. The installed helper receives that JSON on standard input, retains only quota windows, percentages, reset timestamps, label, source, and collection time, and atomically replaces the account's cache. Concurrent sessions use a lock plus timestamp comparison so an older reading cannot overwrite a newer one.
+Claude Code's documented status-line JSON contains rolling subscription `rate_limits` after the first API response in a Claude Code CLI session. The installed helper receives that JSON on standard input, retains only quota windows, percentages, reset timestamps, label, source, and collection time, and atomically replaces the account's cache. Claude Desktop, browser sessions, and CLI sessions using another configuration directory do not update it. Concurrent sessions use a lock plus timestamp comparison so an older reading cannot overwrite a newer one.
 
 If a previous status-line command existed, the helper passes the exact same input to it and prints its output. With no prior visible status line, the helper is quiet. It never retains prompts, responses, session content, unrelated token counts, or credentials.
 
@@ -224,7 +224,7 @@ See the official [Claude Code status-line documentation](https://code.claude.com
 
 ### Claude experimental live collection
 
-`usage --live` launches the absolute official Claude executable directly in an owned `node-pty`, applies the registered default or isolated configuration mode, and enables `--ax-screen-reader`. An `@xterm/headless` bridge answers terminal capability queries and reconstructs terminal state before the adapter waits for semantic readiness, sends `/usage`, and parses quota labels, percentages, and resets from a bounded screen-reader-friendly capture. Login, first-run setup, trust prompts, network failures, upgrade notices, and unrecognized screens become explicit safe errors.
+`usage --live` launches the absolute official Claude executable directly in an owned `node-pty` and applies the registered default or isolated configuration mode. An `@xterm/headless` bridge answers terminal capability queries and reconstructs terminal state before the adapter waits for semantic readiness, sends `/usage`, and parses quota labels, percentages, and resets from a bounded capture. Claude does not persist trust for the home directory, so the adapter accepts that session-only prompt before continuing. Login, first-run setup, network failures, upgrade notices, and unrecognized screens become explicit safe errors.
 
 This parser is experimental because Claude provides no documented one-shot CLI or public subscription endpoint for this data. Claude itself performs the private usage request. `usage` does not extract a token or call an undocumented endpoint. When PTY loading or live parsing fails, cached Claude support continues to work.
 

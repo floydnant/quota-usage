@@ -3,7 +3,13 @@ import type { AccountResult, QuotaWindow, UsageErrorData } from './types.js';
 
 export type ColorMode = 'always' | 'auto' | 'never';
 
-const ANSI = { red: '\u001b[31m', yellow: '\u001b[33m', green: '\u001b[32m', reset: '\u001b[0m' };
+const ANSI = {
+  red: '\u001b[31m',
+  yellow: '\u001b[33m',
+  green: '\u001b[32m',
+  bold: '\u001b[1m',
+  reset: '\u001b[0m',
+};
 
 function shouldColor(mode: ColorMode, tty: boolean, env: NodeJS.ProcessEnv): boolean {
   if (mode === 'never' || env.NO_COLOR !== undefined) return false;
@@ -53,18 +59,32 @@ function sourceLabel(result: AccountResult): string {
   return `${result.status} ${age} ago`;
 }
 
-function resetLabel(window: QuotaWindow, now: Date): string {
-  if (!window.resetAt) return 'reset unknown';
+function resetLabel(window: QuotaWindow, now: Date): { text: string; prominent: boolean } {
+  if (!window.resetAt) return { text: 'reset unknown', prominent: false };
   const reset = Date.parse(window.resetAt);
-  if (!Number.isFinite(reset)) return 'reset unknown';
-  const relative = formatDuration((reset - now.getTime()) / 1_000);
-  const local = new Intl.DateTimeFormat(undefined, {
-    weekday: reset - now.getTime() > 86_400_000 ? 'short' : undefined,
+  if (!Number.isFinite(reset)) return { text: 'reset unknown', prominent: false };
+  const remainingMs = reset - now.getTime();
+  const relative = formatDuration(remainingMs / 1_000);
+  const time = new Intl.DateTimeFormat(undefined, {
     hour: '2-digit',
     minute: '2-digit',
     hour12: false,
   }).format(new Date(reset));
-  return `resets in ${relative}, ${local}`;
+  if (remainingMs < 86_400_000) {
+    return { text: `resets in ${relative}, ${time}`, prominent: false };
+  }
+  const date = new Intl.DateTimeFormat(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  }).format(new Date(reset));
+  const prominent = remainingMs >= 3 * 86_400_000;
+  return {
+    text: prominent
+      ? `resets ${date} at ${time}  (in ${relative})`
+      : `resets in ${relative}, ${date} at ${time}`,
+    prominent,
+  };
 }
 
 export function renderHuman(
@@ -105,8 +125,9 @@ export function renderHuman(
               ? 'yellow'
               : 'green';
         const suffix = reached ? '  LIMIT REACHED' : '';
+        const reset = resetLabel(window, now);
         lines.push(
-          `  ${windowLabel(window).padEnd(labelWidth)}  ${tint(quotaBar(window.usedPercent), barColor, color)}  ${String(percent).padStart(3)}% used  ${resetLabel(window, now)}${tint(suffix, 'red', color)}`,
+          `  ${windowLabel(window).padEnd(labelWidth)}  ${tint(quotaBar(window.usedPercent), barColor, color)}  ${String(percent).padStart(3)}% used  ${tint(reset.text, 'bold', color && reset.prominent)}${tint(suffix, 'red', color)}`,
         );
       }
       if (result.credits) {
