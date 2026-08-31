@@ -9,6 +9,7 @@ const ANSI = {
   green: '\u001b[32m',
   bold: '\u001b[1m',
   reset: '\u001b[0m',
+  dim: '\u001b[2m',
 };
 
 function shouldColor(mode: ColorMode, tty: boolean, env: NodeJS.ProcessEnv): boolean {
@@ -95,10 +96,13 @@ export function renderHuman(
   );
   const lines: string[] = [];
   for (const result of sorted) {
-    const provider = result.provider === 'codex' ? 'Codex' : 'Claude';
-    const metadata = [provider, result.label, result.plan, sourceLabel(result)]
+    const metadata = [
+      result.provider + ':' + result.label + ANSI.dim,
+      result.plan,
+      sourceLabel(result),
+    ]
       .filter(Boolean)
-      .join('  ');
+      .join(' ');
     const headingColor =
       result.status === 'expired' || result.status === 'unavailable'
         ? 'red'
@@ -106,6 +110,7 @@ export function renderHuman(
           ? 'yellow'
           : 'green';
     lines.push(tint(metadata, headingColor, color));
+
     if (result.status === 'unavailable' || !result.windows.length) {
       lines.push(`  ${tint(result.error?.message ?? 'Unavailable', 'red', color)}`);
     } else {
