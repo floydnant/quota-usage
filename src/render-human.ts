@@ -49,7 +49,7 @@ function windowOrder(a: QuotaWindow, b: QuotaWindow): number {
 }
 
 function sourceLabel(result: AccountResult): string {
-  if (result.status === 'live') return 'live';
+  if (result.status === 'live') return '';
   if (result.status === 'unavailable') return 'unavailable';
   if (result.status === 'expired') return 'expired';
   const age = formatDuration(result.cacheAgeSeconds ?? 0);
@@ -96,10 +96,13 @@ export function renderHuman(
   );
   const lines: string[] = [];
   for (const result of sorted) {
-    const provider = `${result.provider[0]?.toUpperCase() ?? ''}${result.provider.slice(1)}`;
-    const metadata = [provider, result.label, result.plan, sourceLabel(result)]
+    const metadata = [
+      result.provider + ':' + result.label + ANSI.dim,
+      result.plan,
+      sourceLabel(result),
+    ]
       .filter(Boolean)
-      .join('  ');
+      .join(' ');
     const headingColor =
       result.status === 'expired' || result.status === 'unavailable'
         ? 'red'
