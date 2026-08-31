@@ -551,7 +551,7 @@ export class ClaudeLiveAdapter implements ProviderAdapter {
             `claude:${account.label}: accepting session-only home-directory trust prompt`,
           );
           buffer = '';
-          child.write('\u001b[A\r');
+          child.write('\r');
         }, 400);
       } else if (/network error|connection (?:failed|error)|unable to connect/i.test(screen)) {
         rejectState('Claude reported a network error', 'provider_failure');

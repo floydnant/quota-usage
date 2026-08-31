@@ -108,7 +108,7 @@ describe('Claude live PTY flow', () => {
     const originalWrite = child.write.bind(child);
     child.write = (data) => {
       child.writes.push(data);
-      if (data === '\u001b[A\r') {
+      if (data === '\r') {
         queueMicrotask(() =>
           (child as unknown as { data?: (value: string) => void }).data?.(
             '\u001b[2J\u001b[HClaude Code Max\n❯',
@@ -126,7 +126,8 @@ describe('Claude live PTY flow', () => {
       'status',
       'live',
     );
-    expect(child.writes).toContain('\u001b[A\r');
+    expect(child.writes).toContain('\r');
+    expect(child.writes).not.toContain('\u001b[A\r');
     expect(child.writes).toContain('/usage\r');
   });
 
