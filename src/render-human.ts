@@ -44,10 +44,6 @@ function windowLabel(window: QuotaWindow): string {
 }
 
 function windowOrder(a: QuotaWindow, b: QuotaWindow): number {
-  if (a.durationSeconds !== undefined && b.durationSeconds !== undefined)
-    return a.durationSeconds - b.durationSeconds;
-  if (a.durationSeconds !== undefined) return -1;
-  if (b.durationSeconds !== undefined) return 1;
   return a.id.localeCompare(b.id);
 }
 
