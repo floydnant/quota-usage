@@ -128,11 +128,11 @@ describe('rendering', () => {
       },
     ];
     const text = renderJson(
-      publicDocument('live', [result], errors, new Date('2026-08-27T18:40:00Z')),
+      publicDocument('default', [result], errors, new Date('2026-08-27T18:40:00Z')),
     );
     expect(JSON.parse(text)).toMatchObject({
       schemaVersion: 1,
-      mode: 'live',
+      mode: 'default',
       errors: [{ code: 'timeout' }],
     });
     expect(text.trim().startsWith('{')).toBe(true);

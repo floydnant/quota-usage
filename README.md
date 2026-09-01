@@ -10,9 +10,9 @@ It reports subscription allowance usage, reset times, plan metadata, and provide
 - Node.js 22 or newer
 - The official `codex` and/or `claude` CLI for the providers you use
 - Codex CLI 0.150.1 or newer
-- Claude Code 2.1.238 or newer for multi-account setup and experimental live collection
+- Claude Code 2.1.238 or newer for multi-account setup and live collection
 
-The Codex protocol was verified against Codex CLI 0.150.1. Claude cached and live behavior was verified against Claude Code 2.1.247; this project retains 2.1.238 as the safe minimum for multi-account operations.
+The Codex protocol was verified against Codex CLI 0.150.1. Claude cached and live behavior was verified against Claude Code 2.1.250; this project retains 2.1.238 as the safe minimum for multi-account operations.
 
 ## Install
 
@@ -65,7 +65,7 @@ usage accounts add claude client --create
 
 Managed state lives under `~/.local/share/usage/accounts/<provider>/<label>/`. `usage` creates a random ownership marker, then launches the official vendor login under that exact state directory. Vendor CLIs continue to own credentials, refresh, and logout.
 
-Claude setup previews its `settings.json` status-line change and asks for confirmation. It saves the prior setting in owner-only application state, installs a compiled collector under `~/.local/share/usage/bin/`, and configures a label-specific wrapper. There is no per-account experimental switch: `--live` is the single global opt-in.
+Claude setup previews its `settings.json` status-line change and asks for confirmation. It saves the prior setting in owner-only application state, installs a compiled collector under `~/.local/share/usage/bin/`, and configures a label-specific wrapper. The status-line cache remains the fallback when live collection fails.
 
 ## Collect usage
 
@@ -75,7 +75,6 @@ usage codex
 usage claude
 usage codex:personal
 usage codex:personal claude:work
-usage --live
 usage --cached
 usage --json
 ```
@@ -84,16 +83,14 @@ With no selector, every configured account is checked. A provider selector choos
 
 Modes:
 
-- Default `usage`: collect Codex live and read Claude status-line caches.
-- `usage --live`: collect Codex live and attempt the experimental Claude TUI method, sequentially, for every selected Claude account.
+- Default `usage`: collect Codex live and run Claude's noninteractive `/usage` command, sequentially, for every selected Claude account.
 - `usage --cached`: start no vendor process and perform no vendor version check.
 
-`--live` and `--cached` are mutually exclusive. Codex checks run with at most four accounts in parallel. Claude live checks run one at a time.
+Codex checks run with at most four accounts in parallel. Claude live checks run one at a time.
 
 Global collection options:
 
 ```text
---live
 --cached
 --json
 --verbose
@@ -222,11 +219,11 @@ If a previous status-line command existed, the helper passes the exact same inpu
 
 See the official [Claude Code status-line documentation](https://code.claude.com/docs/en/statusline) and [environment variables](https://code.claude.com/docs/en/env-vars).
 
-### Claude experimental live collection
+### Claude live collection
 
-`usage --live` launches the absolute official Claude executable directly in an owned `node-pty` and applies the registered default or isolated configuration mode. An `@xterm/headless` bridge answers terminal capability queries and reconstructs terminal state before the adapter waits for semantic readiness, sends `/usage`, and parses quota labels, percentages, and resets from a bounded capture. Claude does not persist trust for the home directory, so the adapter accepts that session-only prompt before continuing. Login, first-run setup, network failures, upgrade notices, and unrecognized screens become explicit safe errors.
+Default `usage` launches the absolute official Claude executable with `-p /usage`, JSON output, no tools, no session persistence, and safe mode. It applies the registered default or isolated configuration mode to every account. Noninteractive mode skips workspace trust and returns plain usage text inside a JSON envelope, so collection needs no PTY or terminal emulator.
 
-This parser is experimental because Claude provides no documented one-shot CLI or public subscription endpoint for this data. Claude itself performs the private usage request. `usage` does not extract a token or call an undocumented endpoint. When PTY loading or live parsing fails, cached Claude support continues to work.
+The parser accepts only named current-session and current-week rows. Activity statistics and unrelated percentages cannot become quota windows. An incomplete or failed usage response retries once before the normal cache fallback. Claude itself performs the usage request. `usage` does not extract a token or call an undocumented endpoint.
 
 ## Credentials, privacy, and processes
 
@@ -236,7 +233,7 @@ Codex identity matching stores SHA-256 of a consistently normalized email, never
 
 The tool sends no telemetry, crash reports, or update checks of its own. `--verbose` and owner-only `--debug-file` output is deliberately redacted: it can contain versions, selected labels, safe paths, timing, cache decisions, retries, and cleanup actions, but no raw authentication data, environment secrets, terminal captures, prompts, or responses.
 
-There is no daemon or resident service. Provider processes exist only during active collection, validation, login, logout, or doctor commands. Every child and PTY created by `usage` is tracked and cleaned after success, failure, timeout, SIGINT, or SIGTERM. Processes not started by `usage` are never attached to or terminated.
+There is no daemon or resident service. Provider processes exist only during active collection, validation, login, logout, or doctor commands. Every child created by `usage` is tracked and cleaned after success, failure, timeout, SIGINT, or SIGTERM. Processes not started by `usage` are never attached to or terminated.
 
 ## Local files
 
@@ -287,7 +284,7 @@ npm uninstall --global quota-usage
 - vendor executable paths and versions
 - vendor-reported login status for every account
 - Codex app-server stdio capability
-- Claude multi-account version support and `node-pty` loading
+- Claude multi-account version support
 - collector installation and configuration drift
 - cache presence, age, expiration, and permissions
 - managed ownership markers
@@ -301,9 +298,9 @@ Common fixes:
 - `logged_out_account`: run the official CLI using the account's registered state directory, or remove and re-register it.
 - `identity_mismatch`: verify the intended Codex account, then run `usage accounts revalidate codex:<label>`.
 - `missing_cache`: use Claude Code on that account after installing the collector, then retry.
-- `expired_cache`: use Claude Code to refresh the status line, or opt into `usage --live`.
+- `expired_cache`: run normal `usage` to refresh live, or use Claude Code to refresh the status line.
 - Collector drift: follow the exact manual cleanup instruction without overwriting the newer Claude setting.
-- Claude live PTY unavailable: cached mode remains supported; run `usage doctor` for the native-module and terminal-emulation detail. Live mode repairs a packaged `node-pty` `spawn-helper` that has lost its executable permission; `doctor` reports the helper path and mode without changing it.
+- Claude live failure: retry with `--verbose`; a usable cache remains available when the noninteractive command fails.
 
 ## Development
 
@@ -322,7 +319,7 @@ npm run build
 npm pack --dry-run
 ```
 
-Tests use temporary directories, protocol fixtures, fake vendor executables, and mocked PTYs. They do not touch real vendor state, credentials, Keychain, status-line settings, or live quota endpoints.
+Tests use temporary directories, protocol fixtures, and fake vendor executables. They do not touch real vendor state, credentials, Keychain, status-line settings, or live quota endpoints.
 
 Real-account verification is manual only. Do not run it without explicit permission. When authorized, smoke test with deliberately selected registrations by exercising default/cached/live/JSON output, running doctor, and removing any temporary registrations. Claude setup changes its status-line configuration after a confirmation, and live checks read current subscription state.
 

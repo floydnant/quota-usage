@@ -13,7 +13,7 @@ import {
 import { canonicalStateStillMatches, collectorPaths } from './accounts.js';
 import { ProcessTracker, runProcess } from './processes.js';
 import { appPaths } from './paths.js';
-import { MIN_CLAUDE_MULTI_ACCOUNT_VERSION, nodePtyHelperStatus } from './providers/claude-live.js';
+import { MIN_CLAUDE_MULTI_ACCOUNT_VERSION } from './providers/claude-live.js';
 
 export interface DoctorCheck {
   name: string;
@@ -89,39 +89,6 @@ export async function doctor(store = new ConfigStore(appPaths())): Promise<Docto
         detail: error instanceof Error ? error.message : String(error),
       });
     }
-  }
-  try {
-    await import('node-pty');
-    const helper = await nodePtyHelperStatus();
-    checks.push({
-      name: 'Claude live PTY',
-      ok: helper?.executable === true,
-      detail: !helper
-        ? 'node-pty loaded, but spawn-helper is missing'
-        : helper.executable
-          ? `node-pty loaded; spawn-helper is executable (${helper.mode.toString(8).padStart(4, '0')})`
-          : `node-pty loaded, but spawn-helper is not executable (${helper.mode.toString(8).padStart(4, '0')}): ${helper.path}`,
-    });
-  } catch (error) {
-    checks.push({
-      name: 'Claude live PTY',
-      ok: false,
-      detail: `node-pty unavailable: ${error instanceof Error ? error.message : String(error)}`,
-    });
-  }
-  try {
-    await import('@xterm/headless');
-    checks.push({
-      name: 'Claude terminal emulation',
-      ok: true,
-      detail: '@xterm/headless loaded',
-    });
-  } catch (error) {
-    checks.push({
-      name: 'Claude terminal emulation',
-      ok: false,
-      detail: `@xterm/headless unavailable: ${error instanceof Error ? error.message : String(error)}`,
-    });
   }
   const now = new Date();
   for (const account of config.accounts) {

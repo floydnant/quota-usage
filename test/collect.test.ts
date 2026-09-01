@@ -20,7 +20,56 @@ async function failingCodex(): Promise<string> {
   return file;
 }
 
+async function workingClaude(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), 'working-claude-'));
+  const file = join(dir, 'claude');
+  await writeFile(
+    file,
+    `#!/usr/bin/env node
+if (process.argv.includes('--version')) {
+  console.log('2.1.250 (Claude Code)');
+  process.exit(0);
+}
+console.log(JSON.stringify({
+  is_error: false,
+  result: 'Current session: 12% used · resets Sep 2 at 1:40am (UTC)\\nCurrent week (all models): 34% used · resets Sep 8 at 3am (UTC)'
+}));
+`,
+  );
+  await chmod(file, 0o700);
+  return file;
+}
+
 describe('collection aggregation', () => {
+  it('collects Claude live in default mode', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'collect-live-claude-'));
+    const paths = appPaths(home);
+    const config: UsageConfig = {
+      ...DEFAULT_CONFIG,
+      defaults: { ...DEFAULT_CONFIG.defaults, claudeExecutable: await workingClaude() },
+      accounts: [
+        {
+          provider: 'claude',
+          label: 'personal',
+          stateDir: join(home, '.claude'),
+          ownership: 'external',
+          claudeDefault: true,
+        },
+      ],
+    };
+    const summary = await collectUsage({
+      config,
+      selectors: [],
+      mode: 'default',
+      paths,
+      now: new Date('2026-09-01T19:00:00Z'),
+    });
+    expect(summary).toMatchObject({
+      exitCode: 0,
+      results: [{ provider: 'claude', source: 'claude-cli', status: 'live' }],
+    });
+  });
+
   it('uses cache only without resolving or starting vendors', async () => {
     const home = await mkdtemp(join(tmpdir(), 'collect-'));
     const paths = appPaths(home);

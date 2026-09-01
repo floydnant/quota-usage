@@ -96,13 +96,10 @@ export function renderHuman(
   );
   const lines: string[] = [];
   for (const result of sorted) {
-    const metadata = [
-      result.provider + ':' + result.label + ANSI.dim,
-      result.plan,
-      sourceLabel(result),
-    ]
+    const provider = `${result.provider[0]?.toUpperCase() ?? ''}${result.provider.slice(1)}`;
+    const metadata = [provider, result.label, result.plan, sourceLabel(result)]
       .filter(Boolean)
-      .join(' ');
+      .join('  ');
     const headingColor =
       result.status === 'expired' || result.status === 'unavailable'
         ? 'red'

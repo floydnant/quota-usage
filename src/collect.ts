@@ -126,7 +126,7 @@ export async function collectUsage(request: CollectRequest): Promise<CollectionS
       });
     }
   }
-  if (request.mode === 'live' && claudeAccounts.length) {
+  if (claudeAccounts.length) {
     try {
       const executable = await resolveExecutable(
         'claude',
@@ -200,8 +200,7 @@ export async function collectUsage(request: CollectRequest): Promise<CollectionS
 
   const claudeResults: AccountResult[] = [];
   for (const account of claudeAccounts) {
-    if (request.mode === 'default') claudeResults.push(await collectCached(account));
-    else if (!claude) {
+    if (!claude) {
       const error = claudeSetupError ?? {
         code: 'missing_vendor_executable' as const,
         message: 'Claude executable was not found',

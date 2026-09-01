@@ -35,9 +35,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@xterm/headless": "6.0.0",
     "commander": "15.0.0",
-    "node-pty": "1.1.0",
     "yaml": "2.9.0"
   },
   "devDependencies": {

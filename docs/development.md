@@ -33,7 +33,7 @@ status-line configuration, or quota endpoints. Follow existing patterns:
 
 - `mkdtemp` plus `appPaths(tempHome)` for filesystem/config tests.
 - Fake executable scripts for vendor version, login, logout, and Codex JSONL.
-- Injected `PtyModule`/`PtyProcess` fakes for Claude live flows.
+- Fake Claude executables that emit noninteractive JSON usage envelopes.
 - Fixed `Date` values for cache freshness, reset parsing, and human output.
 - Spawned inert Node children for cleanup tests; explicitly terminate any
   foreign control child created by a test.
@@ -49,7 +49,7 @@ The high-value test files are:
 | Freshness and timestamp races           | `test/cache.test.ts`                                 |
 | Process/signal cleanup                  | `test/processes.test.ts`                             |
 | Codex protocol and retry                | `test/codex-flow.test.ts`, `test/providers.test.ts`  |
-| Claude TUI and alternate screens        | `test/claude-live.test.ts`, `test/providers.test.ts` |
+| Claude noninteractive usage             | `test/claude-live.test.ts`, `test/providers.test.ts` |
 | Fallback and exit codes                 | `test/collect.test.ts`                               |
 | Human/JSON contracts                    | `test/render.test.ts`                                |
 | Tarball contents and installed bin      | `test/package.test.ts`                               |
@@ -105,9 +105,9 @@ Debug files are mode `0600`.
 
 For Claude live issues, diagnose in this order:
 
-1. `usage doctor` for version, PTY helper, terminal emulator, collector, and cache.
-2. `--verbose` for phase-only state (`waiting-for-output`, readiness, `/usage`, cleanup).
-3. Fake or sanitized screen fixtures in tests.
+1. `usage doctor` for version, login, collector, and cache.
+2. `--verbose` for attempt, retry, fallback, and completion phases.
+3. Fake or sanitized noninteractive JSON fixtures in tests.
 4. A real-account smoke test only after the user explicitly approves it.
 
 ## Release checklist

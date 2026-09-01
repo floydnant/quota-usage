@@ -13,8 +13,8 @@ src/cli.ts
   -> selectors choose registered accounts
   -> collectUsage coordinates mode, concurrency, fallback, and exit code
        -> CodexAdapter: fresh JSONL app-server child per account
-       -> ClaudeLiveAdapter: owned PTY + headless terminal, sequentially
-       -> cache: Claude default mode and live-failure fallback
+       -> ClaudeLiveAdapter: owned noninteractive CLI child, sequentially
+       -> cache: explicit cached mode and live-failure fallback
   -> renderHuman or renderJson writes stdout
   -> ProcessTracker cleans every owned process on all exit paths
 ```
@@ -34,7 +34,7 @@ document to stdout and must never contain progress text or ANSI escapes.
 | Process safety | `src/processes.ts`, `src/executable.ts`                     | Executable resolution, scrubbed vendor environments, owned-child lifecycle          |
 | Codex          | `src/providers/codex.ts`                                    | JSON-RPC handshake, identity verification, rate-limit normalization, retry boundary |
 | Claude cache   | `src/providers/claude-cache.ts`, `src/statusline-helper.ts` | Status-line extraction, chaining, atomic cache updates                              |
-| Claude live    | `src/providers/claude-live.ts`                              | PTY loading, terminal negotiation, TUI state detection, `/usage` parsing            |
+| Claude live    | `src/providers/claude-live.ts`                              | Noninteractive `/usage` execution, JSON envelope and named-row parsing              |
 | Cache          | `src/cache.ts`                                              | Atomic newest-reading writes, freshness and expiration                              |
 | Presentation   | `src/render-human.ts`, `src/render-json.ts`                 | Stable human and JSON contracts                                                     |
 | Diagnostics    | `src/doctor.ts`, `src/uninstall.ts`                         | Read-only health checks and safe cleanup previews/actions                           |
@@ -83,21 +83,14 @@ do not overwrite it. Return exact manual cleanup guidance instead.
 
 ### Claude live
 
-Live mode is experimental and sequential. A fresh `node-pty` runs the absolute
-Claude executable from the user's home directory; `@xterm/headless` answers
-terminal capability queries, reconstructs the screen, and supplies user input.
-Claude does not persist trust for the home directory, so the adapter accepts that
-session-only prompt. The parser uses semantic readiness and explicit
-alternate-screen detection, not a fixed startup sleep. First-run, login, network,
-update, incomplete, and renamed screens are provider errors. Raw screen content
-is bounded in memory and never enters diagnostics.
+Live mode is sequential. A fresh tracked child runs the absolute Claude executable
+with `-p /usage`, JSON output, no tools, no session persistence, and safe mode.
+The adapter parses only named current-session and current-week rows from the JSON
+result. It retries one incomplete or failed response before cache fallback.
 
-Two easy-to-miss compatibility details:
-
-1. The `node-pty` macOS `spawn-helper` can lose its executable bit during
-   packaging. Live mode repairs it narrowly; `doctor` only reports its state.
-2. Claude's normal default state must launch with `CLAUDE_CONFIG_DIR` removed.
-   Isolated/managed accounts must launch with their exact canonical directory.
+Claude's normal default state must launch with `CLAUDE_CONFIG_DIR` removed.
+Isolated and managed accounts launch with their exact canonical directory. API
+keys and explicit OAuth-token environment variables are removed in both cases.
 
 ## Local state and permissions
 

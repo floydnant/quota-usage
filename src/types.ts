@@ -1,6 +1,6 @@
 export type Provider = 'codex' | 'claude';
 export type Ownership = 'external' | 'managed';
-export type CollectionMode = 'default' | 'live' | 'cached';
+export type CollectionMode = 'default' | 'cached';
 export type Freshness = 'live' | 'cached' | 'stale' | 'expired' | 'unavailable';
 
 export const ERROR_CODES = [

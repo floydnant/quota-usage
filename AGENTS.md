@@ -19,8 +19,8 @@ These invariants are settled:
   secrets, Codex `auth.json`, Claude `.credentials.json`, or raw Claude terminal
   captures.
 - Let the official vendor CLIs own login, refresh, and logout.
-- Track and clean up only processes and PTYs started by this program. Never
-  discover, attach to, or terminate unrelated provider processes.
+- Track and clean up only processes started by this program. Never discover,
+  attach to, or terminate unrelated provider processes.
 - Do not access a real account, live quota endpoint, Keychain, or real Claude
   status-line setting in automated tests. A real-account smoke test requires
   explicit user permission.
@@ -60,7 +60,7 @@ npm pack --dry-run
 
 Coverage must keep at least 80% branch coverage for configuration, selectors,
 cache handling, process cleanup, and each provider adapter. Tests must use temp
-directories, fake executables, protocol fixtures, and mocked PTYs.
+directories, fake executables, and protocol fixtures.
 
 Commit generated lockfile changes, but do not commit generated build or coverage
 output. Keep commits focused and update the README, agent docs, and `todo.md` when

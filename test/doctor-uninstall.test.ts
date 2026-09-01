@@ -8,7 +8,7 @@ import { appPaths } from '../src/paths.js';
 import { uninstall, uninstallPreview } from '../src/uninstall.js';
 
 describe('doctor and uninstall', () => {
-  it('reports schema, permissions, executable versions, app-server, and PTY checks without quota calls', async () => {
+  it('reports schema, permissions, executable versions, and app-server checks without quota calls', async () => {
     const home = await mkdtemp(join(tmpdir(), 'doctor-'));
     const store = new ConfigStore(appPaths(home));
     const bin = join(home, 'bin');
@@ -33,7 +33,8 @@ describe('doctor and uninstall', () => {
     const output = renderDoctor(checks);
     expect(output).toContain('valid schema version 1');
     expect(output).toContain('Codex app-server capability');
-    expect(output).toContain('Claude live PTY');
+    expect(output).toContain('Claude multi-account version');
+    expect(output).not.toContain('Claude live PTY');
   });
 
   it('previews and removes helpers/caches while keeping vendor state and optionally config', async () => {

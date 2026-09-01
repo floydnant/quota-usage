@@ -1,11 +1,7 @@
+import { homedir } from 'node:os';
 import { UsageError } from '../errors.js';
 import { compareVersions, parseVersion, vendorEnvironment } from '../executable.js';
-import { ProcessTracker, runProcess } from '../processes.js';
-import { constants } from 'node:fs';
-import { access, chmod, stat } from 'node:fs/promises';
-import { createRequire } from 'node:module';
-import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { ProcessTracker, runProcess, type RunResult } from '../processes.js';
 import type {
   AccountConfig,
   AccountResult,
@@ -16,168 +12,9 @@ import type {
 
 export const MIN_CLAUDE_MULTI_ACCOUNT_VERSION = '2.1.238';
 
-export interface NodePtyHelperStatus {
-  path: string;
-  mode: number;
-  executable: boolean;
-}
-
-function nodePtyPackageRoot(): string {
-  const require = createRequire(import.meta.url);
-  return dirname(require.resolve('node-pty/package.json'));
-}
-
-export async function nodePtyHelperStatus(
-  packageRoot = nodePtyPackageRoot(),
-): Promise<NodePtyHelperStatus | undefined> {
-  const directories = [
-    join(packageRoot, 'build', 'Release'),
-    join(packageRoot, 'build', 'Debug'),
-    join(packageRoot, 'prebuilds', `${process.platform}-${process.arch}`),
-  ];
-  for (const directory of directories) {
-    const nativeModule = join(directory, 'pty.node');
-    const helper = join(directory, 'spawn-helper');
-    if (
-      !(await access(nativeModule).then(
-        () => true,
-        () => false,
-      ))
-    )
-      continue;
-    const info = await stat(helper).catch(() => undefined);
-    if (!info?.isFile()) continue;
-    return {
-      path: helper,
-      mode: info.mode & 0o777,
-      executable: await access(helper, constants.X_OK).then(
-        () => true,
-        () => false,
-      ),
-    };
-  }
-  return undefined;
-}
-
-export async function ensureNodePtyHelperExecutable(
-  packageRoot?: string,
-): Promise<NodePtyHelperStatus> {
-  const status = await nodePtyHelperStatus(packageRoot);
-  if (!status) {
-    throw new UsageError('provider_failure', 'node-pty spawn-helper was not found', {
-      provider: 'claude',
-    });
-  }
-  if (!status.executable) {
-    try {
-      await chmod(status.path, status.mode | 0o111);
-    } catch (error) {
-      throw new UsageError(
-        'provider_failure',
-        `node-pty spawn-helper is not executable: ${status.path}`,
-        { provider: 'claude', cause: error },
-      );
-    }
-  }
-  return {
-    ...status,
-    mode: status.mode | 0o111,
-    executable: true,
-  };
-}
-
-export interface PtyProcess {
-  onData(callback: (data: string) => void): { dispose(): void };
-  onExit(callback: () => void): { dispose(): void };
-  write(data: string): void;
-  kill(signal?: string): void;
-  readonly pid: number;
-}
-
-export interface PtyModule {
-  spawn(
-    file: string,
-    args: string[],
-    options: { cols: number; rows: number; cwd: string; env: Record<string, string> },
-  ): PtyProcess;
-}
-
-interface TerminalDisposable {
-  dispose(): void;
-}
-
-interface HeadlessTerminal {
-  onData(callback: (data: string) => void): TerminalDisposable;
-  onBinary(callback: (data: string) => void): TerminalDisposable;
-  write(data: string, callback?: () => void): void;
-  dispose(): void;
-  readonly buffer: {
-    readonly active: {
-      readonly length: number;
-      getLine(index: number): { translateToString(trimRight?: boolean): string } | undefined;
-    };
-  };
-}
-
-type HeadlessTerminalConstructor = new (options: {
-  cols: number;
-  rows: number;
-  scrollback: number;
-  allowProposedApi: boolean;
-  theme: { background: string };
-}) => HeadlessTerminal;
-
-async function loadHeadlessTerminal(): Promise<HeadlessTerminalConstructor> {
-  try {
-    const imported = await import('@xterm/headless');
-    const module = (imported as { default?: unknown }).default ?? imported;
-    const Terminal = (module as { Terminal?: HeadlessTerminalConstructor }).Terminal;
-    if (!Terminal) throw new Error('Terminal export is missing');
-    return Terminal;
-  } catch (error) {
-    throw new UsageError(
-      'provider_failure',
-      '@xterm/headless could not load; Claude live collection is unavailable',
-      { provider: 'claude', cause: error },
-    );
-  }
-}
-
-function cleanTerminal(value: string): string {
-  /* eslint-disable no-control-regex -- terminal escape sequences are the data being removed */
-  return value
-    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '')
-    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
-  /* eslint-enable no-control-regex */
-}
-
-function safeUiSignals(value: string): string {
-  const text = cleanTerminal(value);
-  const signals: Array<[string, RegExp]> = [
-    ['claude-code', /claude code/i],
-    ['welcome', /welcome/i],
-    ['command-echo', /\/usage/i],
-    ['usage', /\busage\b/i],
-    ['plan-usage', /plan usage/i],
-    ['current-session', /current session/i],
-    ['weekly', /weekly/i],
-    ['login', /log in|sign in|authentication required/i],
-    ['trust', /trust (?:this|the)|do you trust/i],
-    ['theme', /theme/i],
-    ['update', /upgrade required|update available|new version/i],
-    ['network-error', /network error|connection (?:failed|error)|unable to connect/i],
-  ];
-  const found = signals.filter(([, pattern]) => pattern.test(text)).map(([name]) => name);
-  return found.length ? found.join(',') : 'none';
-}
-
-function terminalScreen(terminal: HeadlessTerminal): string {
-  const lines: string[] = [];
-  for (let index = 0; index < terminal.buffer.active.length; index += 1) {
-    const line = terminal.buffer.active.getLine(index)?.translateToString(true);
-    if (line) lines.push(line);
-  }
-  return lines.join('\n');
+interface ClaudePrintEnvelope {
+  result?: unknown;
+  is_error?: unknown;
 }
 
 interface LocalDateParts {
@@ -260,10 +97,9 @@ function parseClaudeLocalReset(text: string, now: Date): Date | undefined {
       if (match[1]) year += 1;
       else {
         const next = new Date(Date.UTC(year, month - 1, day + 1));
-        year = next.getUTCFullYear();
         return dateInZone(
           {
-            year,
+            year: next.getUTCFullYear(),
             month: next.getUTCMonth() + 1,
             day: next.getUTCDate(),
             hour,
@@ -289,8 +125,6 @@ function parseReset(text: string, now: Date): string | null {
   if (iso) return new Date(iso).toISOString();
   const local = parseClaudeLocalReset(text, now);
   if (local) return local.toISOString();
-  const explicit = Date.parse(text.replace(/^.*?reset(?:s|ting)?(?: at| on| in)?\s*/i, ''));
-  if (Number.isFinite(explicit)) return new Date(explicit).toISOString();
   const relative = /reset(?:s|ting)? in\s+(?:(\d+)d\s*)?(?:(\d+)h\s*)?(?:(\d+)m)?/i.exec(text);
   if (relative) {
     const seconds =
@@ -302,76 +136,98 @@ function parseReset(text: string, now: Date): string | null {
   return null;
 }
 
-export function parseClaudeUsageScreen(
-  raw: string,
-  account: Pick<AccountConfig, 'label'>,
-  now = new Date(),
-): AccountResult {
-  const text = cleanTerminal(raw).replace(/\r/g, '');
-  if (/log in|sign in|authentication required/i.test(text)) {
-    throw new UsageError('logged_out_account', `Claude account ${account.label} is logged out`, {
-      provider: 'claude',
-      accountLabel: account.label,
-    });
+function slug(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function quotaIdentity(label: string): {
+  id: string;
+  display: string;
+  durationSeconds: number;
+} | null {
+  if (/^current session(?:\s*\(\s*5\s*(?:h|hour)[^)]*\))?$/i.test(label)) {
+    return { id: 'five_hour', display: '5h', durationSeconds: 5 * 3_600 };
   }
-  if (/trust (?:this|the) (?:folder|directory)|do you trust/i.test(text)) {
-    throw new UsageError('provider_failure', 'Claude displayed a workspace trust prompt', {
+  const weekly = /^current week(?:\s*\(([^)]+)\))?$/i.exec(label);
+  if (!weekly) return null;
+  const scope = weekly[1]?.trim();
+  if (!scope || /^all models$/i.test(scope)) {
+    return { id: 'seven_day', display: '7d', durationSeconds: 7 * 86_400 };
+  }
+  return {
+    id: `seven_day_${slug(scope)}`,
+    display: `${scope} 7d`,
+    durationSeconds: 7 * 86_400,
+  };
+}
+
+function providerScreenError(
+  text: string,
+  account: Pick<AccountConfig, 'label'>,
+): UsageError | null {
+  if (/log in|sign in|authentication required|not authenticated|unauthorized/i.test(text)) {
+    return new UsageError('logged_out_account', `Claude account ${account.label} is logged out`, {
       provider: 'claude',
       accountLabel: account.label,
     });
   }
   if (/network error|connection (?:failed|error)|unable to connect/i.test(text)) {
-    throw new UsageError('provider_failure', 'Claude reported a network error', {
+    return new UsageError('provider_failure', 'Claude reported a network error', {
+      provider: 'claude',
+      accountLabel: account.label,
+      retryable: true,
+    });
+  }
+  if (/failed to load usage data|usage endpoint is rate limited/i.test(text)) {
+    return new UsageError('provider_failure', 'Claude could not load usage data', {
       provider: 'claude',
       accountLabel: account.label,
       retryable: true,
     });
   }
   if (/upgrade required|update available|new version (?:is )?available/i.test(text)) {
-    throw new UsageError('provider_failure', 'Claude displayed an upgrade notice', {
+    return new UsageError('provider_failure', 'Claude displayed an upgrade notice', {
       provider: 'claude',
       accountLabel: account.label,
     });
   }
-  const lines = text
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean);
+  return null;
+}
+
+export function parseClaudeUsageText(
+  text: string,
+  account: Pick<AccountConfig, 'label'>,
+  now = new Date(),
+): AccountResult {
+  const screenError = providerScreenError(text, account);
+  if (screenError) throw screenError;
   const windows: QuotaWindow[] = [];
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index] ?? '';
-    const match = /(?:^|\s)(\d+(?:\.\d+)?)\s*%\s*(?:used)?/i.exec(line);
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    const match =
+      /^(Current session(?:\s*\(\s*5\s*(?:h|hour)[^)]*\))?|Current week(?:\s*\([^)]+\))?)\s*:\s*(\d+(?:\.\d+)?)\s*%\s*used\s*(?:[·|-]\s*)?(.*)$/i.exec(
+        line,
+      );
     if (!match) continue;
-    const context = `${lines[index - 1] ?? ''} ${line} ${lines[index + 1] ?? ''}`;
-    let id: string;
-    let durationSeconds: number | undefined;
-    if (/7\s*(?:d|day)|week(?:ly)?/i.test(line)) {
-      id = 'seven_day';
-      durationSeconds = 7 * 86_400;
-    } else if (/5\s*(?:h|hour)|current session/i.test(line)) {
-      id = 'five_hour';
-      durationSeconds = 5 * 3_600;
-    } else if (/7\s*(?:d|day)|week(?:ly)?/i.test(context)) {
-      id = 'seven_day';
-      durationSeconds = 7 * 86_400;
-    } else if (/5\s*(?:h|hour)|current session/i.test(context)) {
-      id = 'five_hour';
-      durationSeconds = 5 * 3_600;
-    } else {
-      id = `window_${windows.length + 1}`;
-    }
-    if (windows.some((window) => window.id === id)) continue;
-    const used = Number(match[1]);
-    const resetAt = parseReset(context, now);
+    const quotaLabel = match[1];
+    if (!quotaLabel) continue;
+    const identity = quotaIdentity(quotaLabel);
+    if (!identity || windows.some((window) => window.id === identity.id)) continue;
+    const usedPercent = Number(match[2]);
+    if (!Number.isFinite(usedPercent)) continue;
+    const resetText = match[3] ?? '';
     windows.push({
-      id,
-      label: id === 'five_hour' ? '5h' : id === 'seven_day' ? '7d' : id,
-      usedPercent: used,
-      remainingPercent: Math.min(100, Math.max(0, 100 - used)),
-      resetOriginal: /reset/i.test(context) ? context.slice(0, 300) : null,
-      resetAt,
-      ...(durationSeconds === undefined ? {} : { durationSeconds }),
-      reached: used >= 100 || /limit reached|blocked/i.test(context),
+      id: identity.id,
+      label: identity.display,
+      usedPercent,
+      remainingPercent: Math.min(100, Math.max(0, 100 - usedPercent)),
+      resetOriginal: /reset/i.test(resetText) ? resetText.slice(0, 300) : null,
+      resetAt: parseReset(resetText, now),
+      durationSeconds: identity.durationSeconds,
+      reached: usedPercent >= 100 || /limit reached|blocked/i.test(resetText),
     });
   }
   if (!windows.length) {
@@ -381,10 +237,10 @@ export function parseClaudeUsageScreen(
       {
         provider: 'claude',
         accountLabel: account.label,
+        retryable: true,
       },
     );
   }
-  const plan = /\b(Max|Pro|Team|Enterprise)\b/i.exec(text)?.[1];
   const extraUsage =
     /(?:paid )?extra usage[^\n]*(?:balance|remaining)[^\d$€£]*([$€£]?\s*\d+(?:\.\d+)?)/i.exec(
       text,
@@ -392,8 +248,7 @@ export function parseClaudeUsageScreen(
   return {
     provider: 'claude',
     label: account.label,
-    ...(plan ? { plan } : {}),
-    source: 'claude-tui',
+    source: 'claude-cli',
     status: 'live',
     collectedAt: now.toISOString(),
     windows,
@@ -401,17 +256,50 @@ export function parseClaudeUsageScreen(
   };
 }
 
+export function parseClaudePrintResult(
+  processResult: RunResult,
+  account: Pick<AccountConfig, 'label'>,
+  now = new Date(),
+): AccountResult {
+  if (processResult.code !== 0) {
+    const combined = `${processResult.stdout}\n${processResult.stderr}`;
+    const screenError = providerScreenError(combined, account);
+    if (screenError) throw screenError;
+    throw new UsageError('provider_failure', 'Claude noninteractive usage check failed', {
+      provider: 'claude',
+      accountLabel: account.label,
+      retryable: true,
+      details: { exitCode: processResult.code },
+    });
+  }
+  let envelope: ClaudePrintEnvelope;
+  try {
+    envelope = JSON.parse(processResult.stdout) as ClaudePrintEnvelope;
+  } catch (error) {
+    throw new UsageError('parse_failure', 'Claude returned invalid noninteractive JSON', {
+      provider: 'claude',
+      accountLabel: account.label,
+      retryable: true,
+      cause: error,
+    });
+  }
+  if (envelope.is_error === true || typeof envelope.result !== 'string') {
+    throw new UsageError('parse_failure', 'Claude returned an incomplete usage response', {
+      provider: 'claude',
+      accountLabel: account.label,
+      retryable: true,
+    });
+  }
+  return parseClaudeUsageText(envelope.result, account, now);
+}
+
 export class ClaudeLiveAdapter implements ProviderAdapter {
   readonly provider = 'claude' as const;
-  private ptyModule: PtyModule | undefined;
 
   constructor(
     private readonly executable: string,
     private readonly tracker: ProcessTracker,
-    ptyModule?: PtyModule,
-  ) {
-    this.ptyModule = ptyModule;
-  }
+  ) {}
 
   async version(timeoutMs = 2_000): Promise<string> {
     const result = await runProcess(this.executable, ['--version'], {
@@ -429,230 +317,52 @@ export class ClaudeLiveAdapter implements ProviderAdapter {
     return version;
   }
 
-  async loadPty(): Promise<PtyModule> {
-    if (this.ptyModule) return this.ptyModule;
-    try {
-      await ensureNodePtyHelperExecutable();
-      this.ptyModule = await import('node-pty');
-      return this.ptyModule;
-    } catch (error) {
-      if (error instanceof UsageError) throw error;
-      throw new UsageError(
-        'provider_failure',
-        'node-pty could not load; Claude live collection is unavailable',
-        {
-          provider: 'claude',
-          cause: error,
-        },
-      );
-    }
-  }
-
   async collect(account: AccountConfig, options: CollectionOptions): Promise<AccountResult> {
-    const startedAt = Date.now();
     const version = await this.version();
     options.verbose?.(`claude:${account.label}: version ${version}`);
-    const pty = await this.loadPty();
-    const Terminal = await loadHeadlessTerminal();
-    const env: Record<string, string> = {};
-    for (const [key, value] of Object.entries(
-      vendorEnvironment('claude', account.stateDir, process.env, {
-        claudeDefault: account.claudeDefault,
-      }),
-    ))
-      if (value !== undefined) env[key] = value;
-    env.TERM = 'xterm-256color';
-    const cwd = homedir();
-    const child = pty.spawn(this.executable, [], {
-      cols: 100,
-      rows: 32,
-      cwd,
-      env,
+    const env = vendorEnvironment('claude', account.stateDir, process.env, {
+      claudeDefault: account.claudeDefault,
     });
-    const terminal = new Terminal({
-      cols: 100,
-      rows: 32,
-      scrollback: 2_000,
-      allowProposedApi: true,
-      theme: { background: '#000000' },
-    });
-    const terminalDataListener = terminal.onData((data) => child.write(data));
-    const terminalBinaryListener = terminal.onBinary((data) => child.write(data));
-    options.verbose?.(`claude:${account.label}: PTY started pid=${child.pid}`);
-    let resolveExit: (() => void) | undefined;
-    let didExit = false;
-    const exited = new Promise<void>((resolve) => {
-      resolveExit = resolve;
-    });
-    const exitListener = child.onExit(() => {
-      didExit = true;
-      resolveExit?.();
-    });
-    const owned = this.tracker.track({
-      pid: child.pid,
-      kill: (signal) => {
-        if (!didExit) child.kill(signal);
-      },
-      exited,
-    });
-    let buffer = '';
-    let screen = '';
-    let chunks = 0;
-    let sawOutput = false;
-    let sawReadiness = false;
-    let sawQuota = false;
-    let sent = false;
-    let sendTimer: NodeJS.Timeout | undefined;
-    let trustTimer: NodeJS.Timeout | undefined;
-    let answeredBackgroundQuery = false;
-    let answeredVersionQuery = false;
-    let acceptedSessionTrust = false;
-    let rejectedProviderState = false;
-    let rejectProviderState: ((error: UsageError) => void) | undefined;
-    const providerState = new Promise<never>((_, reject) => {
-      rejectProviderState = reject;
-    });
-    let resolveReady: (() => void) | undefined;
-    const ready = new Promise<void>((resolve) => {
-      resolveReady = resolve;
-    });
-    const inspectScreen = () => {
-      screen = terminalScreen(terminal);
-      const trustPromptVisible = /trust (?:this|the) (?:folder|directory)|do you trust/i.test(
-        screen,
-      );
-      const rejectState = (message: string, code: 'logged_out_account' | 'provider_failure') => {
-        if (rejectedProviderState) return;
-        rejectedProviderState = true;
-        rejectProviderState?.(
-          new UsageError(code, message, {
-            provider: 'claude',
-            accountLabel: account.label,
-          }),
-        );
-      };
-      if (/choose the text style|enter selection \[1-7\]/i.test(screen)) {
-        rejectState(
-          `Claude first-run setup is incomplete for ${account.label}; run the official Claude TUI once for this account`,
-          'provider_failure',
-        );
-      } else if (
-        /select login method|open your browser|verification code|setup token/i.test(screen)
-      ) {
-        rejectState(
-          `Claude account ${account.label} requires official login setup`,
-          'logged_out_account',
-        );
-      } else if (!acceptedSessionTrust && trustPromptVisible) {
-        acceptedSessionTrust = true;
-        options.verbose?.(`claude:${account.label}: home-directory trust prompt detected`);
-        trustTimer = setTimeout(() => {
-          options.verbose?.(
-            `claude:${account.label}: accepting session-only home-directory trust prompt`,
-          );
-          buffer = '';
-          child.write('\r');
-        }, 400);
-      } else if (/network error|connection (?:failed|error)|unable to connect/i.test(screen)) {
-        rejectState('Claude reported a network error', 'provider_failure');
-      } else if (/upgrade required|update available|new version (?:is )?available/i.test(screen)) {
-        rejectState('Claude displayed an upgrade notice', 'provider_failure');
-      }
-      if (!rejectedProviderState && !sent && !trustPromptVisible) {
-        if (
-          !sawReadiness &&
-          /(?:type \/ for commands|what can i help|❯|claude code v\d)/i.test(screen)
-        ) {
-          sawReadiness = true;
-          options.verbose?.(`claude:${account.label}: semantic readiness detected`);
-        }
-        if (sawReadiness) {
-          if (sendTimer) clearTimeout(sendTimer);
-          sendTimer = setTimeout(() => {
-            sent = true;
-            options.verbose?.(`claude:${account.label}: input settled; sending /usage`);
-            child.write('/usage\r');
-          }, 400);
-        }
-      }
-      if (
-        sent &&
-        !sawQuota &&
-        /(?:current session|five.hour|5h|seven.day|weekly|plan usage)/i.test(screen)
-      ) {
-        sawQuota = true;
-        options.verbose?.(`claude:${account.label}: quota screen detected`);
-        resolveReady?.();
-      }
-    };
-    const dataListener = child.onData((data) => {
-      chunks += 1;
-      if (!sawOutput) {
-        sawOutput = true;
-        options.verbose?.(`claude:${account.label}: PTY produced output`);
-      }
-      buffer = `${buffer}${data}`.slice(-256 * 1024);
-      terminal.write(data, inspectScreen);
-      if (!answeredBackgroundQuery && buffer.includes('\u001b]11;?')) {
-        answeredBackgroundQuery = true;
-        child.write('\u001b]11;rgb:0000/0000/0000\u001b\\');
-      }
-      if (!answeredVersionQuery && buffer.includes('\u001b[>0q')) {
-        answeredVersionQuery = true;
-        child.write('\u001bP>|xterm.js(6.0.0)\u001b\\');
-      }
-    });
-    let timer: NodeJS.Timeout | undefined;
-    try {
-      await Promise.race([
-        ready,
-        providerState,
-        exited.then(() => {
-          throw new UsageError('provider_failure', 'Claude exited before /usage completed', {
-            provider: 'claude',
-            accountLabel: account.label,
-          });
-        }),
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(() => {
-            options.verbose?.(
-              `claude:${account.label}: timeout phase=${sent ? 'waiting-for-usage' : sawReadiness ? 'waiting-for-input-settle' : sawOutput ? 'waiting-for-readiness' : 'waiting-for-output'} chunks=${chunks} bytes=${Buffer.byteLength(buffer)} uiSignals=${safeUiSignals(screen || buffer)} elapsedMs=${Date.now() - startedAt}`,
-            );
-            reject(
-              new UsageError('timeout', `Claude live check timed out for ${account.label}`, {
+    const args = [
+      '-p',
+      '/usage',
+      '--tools',
+      '',
+      '--output-format',
+      'json',
+      '--no-session-persistence',
+      '--safe-mode',
+    ];
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      options.verbose?.(`claude:${account.label}: noninteractive usage attempt ${attempt}`);
+      try {
+        const result = await runProcess(this.executable, args, {
+          env,
+          cwd: homedir(),
+          timeoutMs: options.timeoutMs,
+          tracker: this.tracker,
+          maxOutput: 256 * 1024,
+        });
+        const parsed = parseClaudePrintResult(result, account, options.now ?? new Date());
+        options.verbose?.(`claude:${account.label}: noninteractive usage complete`);
+        return parsed;
+      } catch (caught) {
+        const error =
+          caught instanceof UsageError && caught.data.code === 'timeout'
+            ? new UsageError('timeout', `Claude live check timed out for ${account.label}`, {
                 provider: 'claude',
                 accountLabel: account.label,
-              }),
-            );
-          }, options.timeoutMs);
-        }),
-      ]);
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      const usageScreen = (screen || buffer).replace(
-        /trust (?:this|the) (?:folder|directory)|do you trust/gi,
-        'trust accepted',
-      );
-      return parseClaudeUsageScreen(usageScreen, account, options.now ?? new Date());
-    } finally {
-      if (timer) clearTimeout(timer);
-      if (sendTimer) clearTimeout(sendTimer);
-      if (trustTimer) clearTimeout(trustTimer);
-      child.write('\u001b');
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      child.write('/exit\r');
-      await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 300))]);
-      const hasExited = (): boolean => didExit;
-      if (!hasExited()) child.kill('SIGTERM');
-      await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 200))]);
-      if (!hasExited()) child.kill('SIGKILL');
-      await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 1_000))]);
-      this.tracker.untrack(owned);
-      options.verbose?.(`claude:${account.label}: PTY cleanup complete`);
-      dataListener.dispose();
-      exitListener.dispose();
-      terminalDataListener.dispose();
-      terminalBinaryListener.dispose();
-      terminal.dispose();
+                retryable: true,
+                cause: caught,
+              })
+            : caught;
+        lastError = error;
+        const retryable = error instanceof UsageError && error.data.retryable;
+        if (!retryable || attempt === 2) throw error;
+        options.verbose?.(`claude:${account.label}: incomplete usage response; retrying once`);
+      }
     }
+    throw lastError;
   }
 }

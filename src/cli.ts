@@ -17,7 +17,6 @@ import { uninstall, uninstallPreview } from './uninstall.js';
 import type { CollectionMode } from './types.js';
 
 interface GlobalOptions {
-  live?: boolean;
   cached?: boolean;
   json?: boolean;
   verbose?: boolean;
@@ -44,7 +43,6 @@ const program = new Command()
     '[selectors...]',
     'accounts or providers to collect (for example codex:personal claude)',
   )
-  .option('--live', 'collect Codex and experimental live Claude quota data')
   .option('--cached', 'read caches only; start no vendor process and perform no version check')
   .option('--json', 'emit one versioned JSON document')
   .option('--verbose', 'write safe diagnostics to stderr')
@@ -66,12 +64,9 @@ program.action(async (selectors: string[], options: GlobalOptions) => {
     if (options.verbose) process.stderr.write(`${message}\n`);
   };
   try {
-    if (options.live && options.cached) {
-      throw new UsageError('invalid_configuration', '--live and --cached are mutually exclusive');
-    }
     if (options.codexTimeout) parseDuration(options.codexTimeout);
     if (options.claudeTimeout) parseDuration(options.claudeTimeout);
-    const mode: CollectionMode = options.live ? 'live' : options.cached ? 'cached' : 'default';
+    const mode: CollectionMode = options.cached ? 'cached' : 'default';
     const store = new ConfigStore(appPaths());
     const config = await store.load();
     verbose(`mode=${mode}`);
@@ -103,9 +98,7 @@ program.action(async (selectors: string[], options: GlobalOptions) => {
     logDebug(`${data.code}: ${data.message}`);
     if (options.json) {
       process.stdout.write(
-        renderJson(
-          publicDocument(options.cached ? 'cached' : options.live ? 'live' : 'default', [], [data]),
-        ),
+        renderJson(publicDocument(options.cached ? 'cached' : 'default', [], [data])),
       );
     } else process.stderr.write(`usage: ${data.message}\n`);
     process.exitCode = 2;

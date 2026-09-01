@@ -20,12 +20,12 @@ invariants in [`AGENTS.md`](AGENTS.md) when designing any item.
 
 ## Roadmap carried from the README
 
-- [ ] Linux support, including native PTY packaging and platform-specific paths.
+- [ ] Linux support, including platform-specific paths and account-state behavior.
 - [ ] More providers through `ProviderAdapter`, without provider-specific logic
       leaking into collection or rendering.
 
 ## Maintenance
 
-- [ ] Revalidate Codex app-server and Claude TUI/status-line fixtures when the
+- [ ] Revalidate Codex app-server and Claude noninteractive/status-line fixtures when the
       supported vendor versions change.
 - [ ] Recheck npm package-name availability immediately before publication.
