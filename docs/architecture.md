@@ -9,6 +9,7 @@ a change belongs. User-facing behavior and commands are documented in the
 
 ```text
 src/cli.ts
+  -> startAutoUpdate launches a bounded, unreferenced checkout updater
   -> loadAccountConfig loads/validates optional config.yaml (in-memory defaults if absent)
   -> discoverAccounts merges immediate provider-prefixed home directories with registrations
   -> selectors choose registered accounts
@@ -160,3 +161,32 @@ retains `provider` and `label`; the display field is additive to schema version 
 Selectors accept displayed directory names and existing colon aliases. The `default` alias falls back to a default directory if no actual account has
 that label. `personal` is never an implicit alias. Bare provider selectors continue to select every account
 for that provider.
+
+## Background checkout updates
+
+`src/auto-update.ts` starts an asynchronous task in the CLI process only for
+quota commands run from a Git checkout. `--no-update` skips it. The installation
+root comes from the module location. An AbortController cancels the task on close,
+SIGINT, or SIGTERM. Shutdown waits for owned children and temporary-worktree
+cleanup, then prints allowlisted diagnostics after terminal restoration. Results
+stay in memory; no failures are deferred to future invocations. Quota exit codes
+and JSON remain unchanged. Git/npm children use separate process groups so their
+descendants can be terminated together, but are never unreferenced. Cancellation
+sends SIGTERM and escalates to SIGKILL after 300ms, awaiting child close. Worktree
+cleanup has its own ten-second command timeout and is awaited even on cancellation.
+Artifact publication or rollback already in progress finishes before shutdown.
+
+`src/update-checkout.ts` uses a per-checkout lease in application state, a five-minute
+command budget, and owned process groups for Git/npm descendants. It requires a
+clean `main`, fetches `origin/main`, and builds the pinned target in a temporary
+sibling worktree with locked development dependencies. It rechecks branch, HEAD,
+and dirtiness before fast-forwarding and swapping the prepared dependency/build
+directories. Failed publication rolls back runtime files; a pending marker forces
+a rebuild retry even when HEAD already advanced. Recovery copies are retained if
+the filesystem refuses rollback. Normal temporary worktrees and process groups are
+cleaned on every exit path. Abandoned locks expire after fifteen minutes.
+
+This finite maintenance task belongs to the foreground command and is drained
+before normal shutdown. It never opens vendor credentials, contacts quota endpoints, stashes
+changes, checks out another branch, or force-resets user work. Raw child output is
+never printed or retained in update diagnostic state.

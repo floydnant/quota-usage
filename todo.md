@@ -51,3 +51,10 @@ invariants in [`AGENTS.md`](AGENTS.md) when designing any item.
 
 - [x] Display directory names and accept them as filters while retaining colon
       aliases and explicit `default` selectors; `personal` requires an actual label.
+
+## Completed checkout maintenance
+
+- [x] Update clean main checkouts from origin/main in a bounded asynchronous task,
+      build before installation, and keep the current CLI session responsive.
+- [x] Cancel and drain unfinished updates on CLI close, report failures after
+      terminal restoration, and support `--no-update`.

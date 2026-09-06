@@ -8,7 +8,7 @@ function run(home: string, args: string[]) {
   return new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
     execFile(
       process.execPath,
-      ['dist/cli.js', ...args],
+      ['dist/cli.js', '--no-update', ...args],
       {
         // Isolate the CLI's home lookup; cached/list commands must never start vendors.
         env: { ...process.env, HOME: home },

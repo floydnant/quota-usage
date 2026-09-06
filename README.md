@@ -32,6 +32,35 @@ npm link
 usage --help
 ```
 
+### Automatic updates from a checkout
+
+When a quota command runs from a Git checkout (including an `npm link` install),
+`usage` starts a one-shot background update from `origin/main`. It leaves the
+current session running and uses the newer build on subsequent runs. Normal npm
+package installations, help, and account-management commands do not self-update.
+Use `usage --no-update` to skip this behavior.
+
+The checkout must be on `main` with no staged, unstaged, or untracked changes.
+Updates only fast-forward; they never stash edits, reset branches, or create merge
+commits. A temporary sibling worktree installs locked dependencies with `npm ci`
+and runs the build. Only a successful build is installed into the original
+checkout. If installation fails, the previous runnable files are restored where
+possible, and a pending build is retried on the next run.
+
+Updates have a five-minute command budget and a per-checkout lock. Overlapping
+invocations reuse the running job by skipping another update. Completed failures
+are printed on stderr when the usage screen closes, without changing the quota
+exit code or JSON stdout. Closing the CLI cancels unfinished updates, terminates owned Git/npm
+process groups (escalating to SIGKILL after 300ms), and waits for child exit and
+temporary-worktree cleanup. Updates cannot continue after normal CLI shutdown.
+Startup and collection never wait for an update; shutdown waits only for
+cancellation and cleanup, not for a build to finish. A short invocation may cancel
+the update before it completes; a future invocation tries again. Failures and
+cancellation are reported on that same close, never deferred to another run.
+
+`--cached` still starts no provider process, but checkout updating remains enabled;
+use `usage --cached --no-update` to avoid update network activity too.
+
 The npm package ships compiled JavaScript, source maps, declarations, this README, and the license. TypeScript and a development runner are not needed after installation.
 
 ## Set up accounts
@@ -137,6 +166,7 @@ Global collection options:
 
 ```text
 --cached
+--no-update
 --no-discover
 --plain
 --tui
@@ -283,9 +313,9 @@ The parser accepts only named current-session and current-week rows. Activity st
 
 Codex identity matching stores SHA-256 of a consistently normalized email, never the plaintext email. Normal output shows local labels. Claude identity is its local label bound to a canonical stable configuration directory.
 
-The tool sends no telemetry, crash reports, or update checks of its own. `--verbose` and owner-only `--debug-file` output is deliberately redacted: it can contain versions, selected labels, safe paths, timing, cache decisions, retries, and cleanup actions, but no raw authentication data, environment secrets, terminal captures, prompts, or responses.
+The tool sends no telemetry or crash reports. Checkout auto-updates contact the configured Git origin and npm registry for updates and locked dependencies; `--no-update` disables them. `--verbose` and owner-only `--debug-file` output is deliberately redacted: it can contain versions, selected labels, safe paths, timing, cache decisions, retries, and cleanup actions, but no raw authentication data, environment secrets, terminal captures, prompts, or responses.
 
-There is no daemon or resident service. Provider processes exist only during active collection, validation, login, logout, or doctor commands. Every child created by `usage` is tracked and cleaned after success, failure, timeout, SIGINT, or SIGTERM. Processes not started by `usage` are never attached to or terminated.
+There is no daemon or resident service. Provider processes exist only during active collection, validation, login, logout, or doctor commands. Provider children created by `usage` are tracked and cleaned after success, failure, timeout, SIGINT, or SIGTERM. The checkout updater is owned by the foreground command; it cleans its Git/npm process groups after completion, failure, timeout, or cancellation and is drained before normal CLI shutdown. Processes not started by `usage` are never attached to or terminated.
 
 ## Local files
 
@@ -295,6 +325,7 @@ Backup:         ~/.config/usage/config.yaml.bak
 Managed state:  ~/.local/share/usage/accounts/
 Helper files:   ~/.local/share/usage/bin/
 Cache:          ~/Library/Caches/usage/
+Update state:   ~/.local/share/usage/updates/<checkout-hash>/
 ```
 
 Application directories use mode `0700`. Configuration, backup, ownership, collector-backup, and cache files use `0600`. YAML has top-level `schemaVersion: 1`, is completely validated before use, rejects unknown fields with their YAML path, and supports careful manual edits. Writes are atomic and retain one previous backup.
@@ -376,7 +407,7 @@ npm run build
 npm pack --dry-run
 ```
 
-Tests use temporary directories, protocol fixtures, and fake vendor executables. They do not touch real vendor state, credentials, Keychain, status-line settings, or live quota endpoints.
+Tests use temporary directories, protocol fixtures, fake vendor executables, and local Git remotes with fake builds. Unrelated CLI tests disable checkout updates. They do not touch real vendor state, credentials, Keychain, status-line settings, or live quota endpoints.
 
 Real-account verification is manual only. Do not run it without explicit permission. When authorized, smoke test with deliberately selected registrations by exercising default/cached/live/JSON output, running doctor, and removing any temporary registrations. Claude setup changes its status-line configuration after a confirmation, and live checks read current subscription state.
 

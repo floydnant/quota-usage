@@ -129,3 +129,10 @@ isolate the child process home and use cached/list commands or fake executables.
 Cover matching names, directory additions/removals, explicit-registration precedence,
 symlink deduplication, cache isolation when a directory changes, and logged-out rows
 beside successful results. Never infer login by opening credential files.
+
+Checkout-update changes are covered by `test/auto-update.test.ts`. Use temporary
+local Git remotes and injected fake npm builds; never fetch, merge, or rebuild the
+real checkout from automated tests. Other CLI tests pass `--no-update`. Cover
+cancellation and drained process exit, close-time stderr reporting, dirty/divergent checkouts,
+concurrent invocations, changes made during building, rollback, retry, and owned
+process-group timeouts and SIGKILL escalation for stubborn descendants. Run the full verification sequence for updater changes.

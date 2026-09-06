@@ -9,6 +9,8 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'json', 'json-summary'],
       include: [
+        'src/auto-update.ts',
+        'src/update-checkout.ts',
         'src/config.ts',
         'src/selectors.ts',
         'src/cache.ts',

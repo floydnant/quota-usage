@@ -13,6 +13,10 @@ API rate-limit tool. The binary is `usage`; the package is `quota-usage`.
 These invariants are settled:
 
 - Do not add a daemon, resident service, threshold, or `check` command.
+- Checkout auto-updates use a bounded asynchronous task owned by the foreground
+  CLI. Cancel and drain it on close or signals. It must never block collection, overwrite a dirty or
+  non-main checkout, or expose raw Git/npm output. Build before publishing, own
+  and clean updater process groups, and report failures only after the UI closes.
 - The foreground TUI defaults only on interactive terminals. Keep `--plain`,
   redirected output, and `--json` finite; dashboard refreshes must not overlap.
 - Discover `~/.codex` and `~/.claude` as defaults, plus immediate
@@ -32,7 +36,8 @@ These invariants are settled:
   attach to, or terminate unrelated provider processes.
 - Do not access a real account, live quota endpoint, Keychain, or real Claude
   status-line setting in automated tests. A real-account smoke test requires
-  explicit user permission.
+  explicit user permission. Update tests use temporary local Git remotes and fake
+  builds; disable auto-update in unrelated CLI tests.
 
 ## Working conventions
 

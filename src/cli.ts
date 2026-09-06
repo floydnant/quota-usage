@@ -3,6 +3,7 @@ import { open } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { Command, Option } from 'commander';
 import { addAccount, listAccounts, removeAccount, revalidateCodex } from './accounts.js';
+import { startAutoUpdate } from './auto-update.js';
 import { collectUsage } from './collect.js';
 import { ConfigStore } from './config.js';
 import { discoverAccounts, loadAccountConfig } from './discovery.js';
@@ -20,6 +21,7 @@ import type { CollectionMode } from './types.js';
 
 interface GlobalOptions {
   cached?: boolean;
+  update: boolean;
   discover: boolean;
   tui?: boolean;
   plain?: boolean;
@@ -49,6 +51,7 @@ const program = new Command()
     '[selectors...]',
     'accounts or providers to collect (for example codex:personal claude)',
   )
+  .option('--no-update', 'skip background repository update and rebuild')
   .option('--no-discover', 'use only explicitly registered accounts')
   .option('--cached', 'read caches only; start no vendor process and perform no version check')
   .addOption(new Option('--json', 'emit one versioned JSON document').conflicts('tui'))
@@ -71,9 +74,10 @@ const program = new Command()
   .option('--claude-timeout <duration>', 'Claude account timeout (for example 30s or 1m)');
 
 program.action(async (selectors: string[], options: GlobalOptions) => {
-  const tracker = new ProcessTracker();
-  const removeSignals = tracker.installSignalHandlers();
   const logDebug = await debugLogger(options.debugFile);
+  const update = startAutoUpdate({ enabled: options.update });
+  const tracker = new ProcessTracker();
+  const removeSignals = tracker.installSignalHandlers(() => update.cancel());
   const verbose = (message: string): void => {
     logDebug(message);
     if (options.verbose) process.stderr.write(`${message}\n`);
@@ -132,7 +136,8 @@ program.action(async (selectors: string[], options: GlobalOptions) => {
     } else process.stderr.write(`usage: ${data.message}\n`);
     process.exitCode = 2;
   } finally {
-    await tracker.cleanup();
+    update.cancel();
+    await Promise.all([tracker.cleanup(), update.close()]);
     removeSignals();
   }
 });
