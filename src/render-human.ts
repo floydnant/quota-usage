@@ -107,12 +107,6 @@ export function renderHuman(
     0,
     ...sorted.flatMap((result) => result.windows.map((window) => windowLabel(window).length)),
   );
-  const resetWidth = Math.max(
-    0,
-    ...sorted.flatMap((result) =>
-      result.windows.map((window) => resetLabel(window, now).text.length),
-    ),
-  );
   const lines: string[] = [];
   for (const result of sorted) {
     const headingColor =
@@ -150,7 +144,7 @@ export function renderHuman(
         const suffix = reached ? '  LIMIT REACHED' : '';
         const reset = resetLabel(window, now, color);
         const plain =
-          `  ${windowLabel(window).padEnd(labelWidth)}  ${quotaBar(window.usedPercent)}  ${String(percent).padStart(3)}% used  ${reset.formatted}${' '.repeat(resetWidth - reset.text.length)}${suffix}`.trimEnd();
+          `  ${windowLabel(window).padEnd(labelWidth)}  ${quotaBar(window.usedPercent)}  ${String(percent).padStart(3)}% used  ${reset.formatted}${suffix}`.trimEnd();
         lines.push(
           reached
             ? tint(plain, 'red', color)

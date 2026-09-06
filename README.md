@@ -165,7 +165,7 @@ Human output has a directory-name heading with a dimmed subscription name per ac
   7d  [███████▊░░░░░░░░░░░░]   39% used  resets Mon, Aug 31 at 04:00  (in 3d 8h)
 ```
 
-Green is below 60% used, yellow is 60–79%, and red begins at 80%. `LIMIT REACHED` appears when the provider marks a window reached or usage reaches 100%, and the entire window row is red. Relative reset countdowns stand out; reset labels, absolute dates and times, and `reset unknown` are dimmed. Reset dates three or more days away move before the countdown. Stale data is yellow and expired or unavailable data is red. Output remains fully understandable without color. Unavailable accounts remain in sorted position and never get a fake zero bar.
+Green is below 60% used, yellow is 60–79%, and red begins at 80%. `LIMIT REACHED` appears when the provider marks a window reached or usage reaches 100%, and the entire window row is red. The marker follows the reset text directly, without padding to a separate column. Relative reset countdowns stand out; reset labels, absolute dates and times, and `reset unknown` are dimmed. Reset dates three or more days away move before the countdown. Stale data is yellow and expired or unavailable data is red. Output remains fully understandable without color. Unavailable accounts remain in sorted position and never get a fake zero bar.
 
 Reset credits appear one per row, sorted by expiration date, with a full local date and time. Rows are dimmed unless expiration is strictly less than seven days in the future. Expired credits remain labeled and dimmed; credits without expiration or with unknown dates follow dated credits. When only a count is supplied, it is shown without inventing expiration dates. Paid credit balances remain separate.
 
