@@ -9,7 +9,7 @@ a change belongs. User-facing behavior and commands are documented in the
 
 ```text
 src/cli.ts
-  -> startAutoUpdate launches a bounded, unreferenced checkout updater
+  -> startAutoUpdate starts a bounded, CLI-owned checkout update task
   -> loadAccountConfig loads/validates optional config.yaml (in-memory defaults if absent)
   -> discoverAccounts merges immediate provider-prefixed home directories with registrations
   -> selectors choose registered accounts
@@ -125,7 +125,16 @@ The TUI is the default only when stdin and stdout are terminals. `--plain` and
 `--json` remain finite snapshots; `--cached` also applies to dashboard refreshes.
 `runTui` owns raw input, the alternate screen, scrolling, resize handling, and a
 bounded refresh timer. It restores terminal state in `finally` and drains an
-in-flight collection when quitting. Existing process tracking owns provider cleanup.
+in-flight collection when quitting. Frames update only changed rows using absolute
+cursor positions, overwrite text before erasing stale tails, and clear the screen
+only on entry. Every frame is bracketed with synchronized-output mode 2026
+markers in one write; no synchronization remains active while awaiting collection
+or input, and cleanup always resets it. See the [protocol specification](https://github.com/contour-terminal/vt-extensions/blob/master/synchronized-output.md).
+Resize invalidates row comparisons and redraws the clipped viewport;
+frames never exceed its height. Warnings are deduplicated and printed after terminal
+restoration so stderr does not scroll the dashboard. CLI verbose diagnostics are
+also deferred while the dashboard is active, retaining the last 1,000 entries;
+debug-file logging remains immediate. Existing process tracking owns provider cleanup.
 Human window columns align across accounts. Reset-credit detail rows use the
 normalized credit fields, sort dated entries first, and emphasize only expirations
 strictly within the next seven days. JSON and cache schemas remain unchanged.
@@ -169,7 +178,9 @@ quota commands run from a Git checkout. `--no-update` skips it. The installation
 root comes from the module location. An AbortController cancels the task on close,
 SIGINT, or SIGTERM. Shutdown waits for owned children and temporary-worktree
 cleanup, then prints allowlisted diagnostics after terminal restoration. Results
-stay in memory; no failures are deferred to future invocations. Quota exit codes
+stay in memory; no failures are deferred to future invocations. A completed
+installation returns an explicit updated result and prints a success notice on
+close; unchanged or skipped updates remain silent. Quota exit codes
 and JSON remain unchanged. Git/npm children use separate process groups so their
 descendants can be terminated together, but are never unreferenced. Cancellation
 sends SIGTERM and escalates to SIGKILL after 300ms, awaiting child close. Worktree

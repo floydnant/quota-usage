@@ -32,6 +32,10 @@ invariants in [`AGENTS.md`](AGENTS.md) when designing any item.
 
 ## Completed output improvements
 
+- [x] Avoid dashboard flicker by updating only changed rows and deferring warnings
+      until terminal restoration.
+- [x] Group dashboard frames with synchronized-output markers and keep verbose
+      diagnostics off the active screen.
 - [x] Color the whole quota row red when a limit is reached.
 - [x] Align quota columns across accounts.
 - [x] Default to a foreground auto-refreshing TUI on interactive terminals, with
@@ -58,3 +62,6 @@ invariants in [`AGENTS.md`](AGENTS.md) when designing any item.
       build before installation, and keep the current CLI session responsive.
 - [x] Cancel and drain unfinished updates on CLI close, report failures after
       terminal restoration, and support `--no-update`.
+
+- [x] Announce successful CLI update installation on close, with no success notice
+      for unchanged, skipped, cancelled, or failed updates.

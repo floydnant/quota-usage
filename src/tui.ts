@@ -27,6 +27,9 @@ export async function runTui(options: {
   let refreshing = false;
   let nextRefresh = 0;
   let offset = 0;
+  let previousFrame: string[] = [];
+  let previousWidth = 0;
+  let previousRows = 0;
   let wake: (() => void) | undefined;
   const wasRaw = input.isRaw;
   const wasFlowing = input.readableFlowing;
@@ -40,7 +43,8 @@ export async function runTui(options: {
         })
       : 'Loading usage…';
     const lines = body.split('\n');
-    const height = Math.max(1, (output.rows || 24) - 4);
+    const rows = Math.max(1, output.rows || 24);
+    const height = Math.max(0, rows - 4);
     offset = Math.min(offset, Math.max(0, lines.length - height));
     const status = isStopped()
       ? 'Finishing current check…'
@@ -56,21 +60,28 @@ export async function runTui(options: {
     ];
     // Keep each physical row within the viewport, including on narrow terminals.
     const width = Math.max(1, (output.columns || 80) - 1);
-    output.write(
-      `\u001b[H\u001b[2J${frame
-        .map((line) => {
-          const plain = stripVTControlCharacters(line);
-          const characters = Array.from(
-            new Intl.Segmenter().segment(plain),
-            (part) => part.segment,
-          );
-          const prefix = line.slice(0, line.indexOf(plain[0] ?? ''));
-          return characters.length > width
-            ? `${prefix}${characters.slice(0, width).join('')}${prefix ? '\u001b[0m' : ''}`
-            : line;
-        })
-        .join('\r\n')}`,
-    );
+    const clipped = frame.slice(0, rows).map((line) => {
+      const plain = stripVTControlCharacters(line);
+      const characters = Array.from(new Intl.Segmenter().segment(plain), (part) => part.segment);
+      const prefix = line.slice(0, line.indexOf(plain[0] ?? ''));
+      return characters.length > width
+        ? `${prefix}${characters.slice(0, width).join('')}${prefix ? '\u001b[0m' : ''}`
+        : line;
+    });
+    const resized = width !== previousWidth || rows !== previousRows;
+    let patch = '';
+    for (let row = 0; row < Math.min(rows, Math.max(clipped.length, previousFrame.length)); row++) {
+      const line = clipped[row] ?? '';
+      if (resized || line !== (previousFrame[row] ?? '')) {
+        // Overwrite before erasing the tail: never expose a blank screen between frames.
+        patch += `\u001b[${row + 1};1H${line}\u001b[0m\u001b[K`;
+      }
+    }
+    if (resized && clipped.length < rows) patch += `\u001b[${clipped.length + 1};1H\u001b[J`;
+    if (patch) output.write(`\u001b[?2026h${patch}\u001b[?2026l`);
+    previousFrame = clipped;
+    previousWidth = width;
+    previousRows = rows;
   };
   const stop = (): void => {
     state.stopped = true;
@@ -99,7 +110,7 @@ export async function runTui(options: {
     process.on('SIGINT', stop);
     process.on('SIGTERM', stop);
     output.on('resize', draw);
-    output.write('\u001b[?1049h\u001b[?25l');
+    output.write('\u001b[?2026h\u001b[?1049h\u001b[?25l\u001b[2J\u001b[?2026l');
     while (!isStopped()) {
       refreshing = true;
       draw();
@@ -107,7 +118,6 @@ export async function runTui(options: {
       for (const result of summary.results) {
         for (const warning of result.warnings ?? []) {
           const message = `${result.provider}:${result.label}: ${warning}`;
-          if (!seenWarnings.has(message)) process.stderr.write(`${message}\n`);
           seenWarnings.add(message);
         }
       }
@@ -141,6 +151,7 @@ export async function runTui(options: {
     process.off('SIGTERM', stop);
     input.setRawMode(wasRaw);
     if (wasFlowing !== true) input.pause();
-    output.write('\u001b[?25h\u001b[?1049l');
+    output.write('\u001b[?2026l\u001b[?25h\u001b[?1049l');
+    for (const message of seenWarnings) process.stderr.write(`${message}\n`);
   }
 }

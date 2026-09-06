@@ -96,7 +96,10 @@ Human output must remain useful without color. JSON changes must preserve one
 valid document and `schemaVersion`; incompatible public changes require an
 explicit schema decision. Keep warnings/diagnostics on stderr. Dashboard tests use fake terminal streams,
 fake clocks, and stub collections to verify refresh scheduling and terminal
-restoration without touching real accounts.
+restoration without touching real accounts. Cover countdown-only row updates,
+unchanged frames, shortened/removed rows, resize and short viewports, and warnings
+printed after terminal restoration. Verify synchronized frame markers are paired
+before waiting for collection or input and reset on failure and exit.
 
 ## Safe diagnostics
 

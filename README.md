@@ -57,6 +57,9 @@ Startup and collection never wait for an update; shutdown waits only for
 cancellation and cleanup, not for a build to finish. A short invocation may cancel
 the update before it completes; a future invocation tries again. Failures and
 cancellation are reported on that same close, never deferred to another run.
+A successful installation prints `usage: CLI updated successfully; the new version
+will be used on the next run.` on stderr after closing. An already-current checkout
+or a skipped update stays quiet.
 
 `--cached` still starts no provider process, but checkout updating remains enabled;
 use `usage --cached --no-update` to avoid update network activity too.
@@ -158,7 +161,7 @@ Modes:
 - `usage --tui`: explicitly select the dashboard; requires interactive input and output.
 - `usage --json`: print one JSON document and exit.
 
-The dashboard refreshes one minute after each completed collection. Set `--refresh 30s` to change this interval (minimum one second). Press `r` to refresh, `q` to quit, or ↑/↓ (also `k`/`j`) to scroll. Refreshes never overlap. Quitting waits for the current collection to finish and restores the terminal. Narrow terminals clip long rows; widen the terminal to see full reset dates. The dashboard runs only while `usage` is open; it is not a background service.
+The dashboard refreshes one minute after each completed collection. Set `--refresh 30s` to change this interval (minimum one second). Press `r` to refresh, `q` to quit, or ↑/↓ (also `k`/`j`) to scroll. Refreshes never overlap. Countdown ticks redraw only changed rows; terminals supporting synchronized output display each frame together. Warnings and verbose diagnostics are printed after the dashboard closes (the last 1,000 verbose entries are retained; `--debug-file` records all entries as they occur). Quitting waits for the current collection to finish and restores the terminal. Narrow terminals clip long rows; widen the terminal to see full reset dates. The dashboard runs only while `usage` is open; it is not a background service.
 
 Codex checks run with at most four accounts in parallel. Claude live checks run one at a time.
 

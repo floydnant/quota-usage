@@ -78,9 +78,17 @@ program.action(async (selectors: string[], options: GlobalOptions) => {
   const update = startAutoUpdate({ enabled: options.update });
   const tracker = new ProcessTracker();
   const removeSignals = tracker.installSignalHandlers(() => update.cancel());
+  let dashboardActive = false;
+  const deferredVerbose: string[] = [];
   const verbose = (message: string): void => {
     logDebug(message);
-    if (options.verbose) process.stderr.write(`${message}\n`);
+    if (options.verbose) {
+      if (dashboardActive) {
+        deferredVerbose.push(message);
+        // Keep long dashboard sessions bounded; the debug file still records every entry.
+        if (deferredVerbose.length > 1_000) deferredVerbose.shift();
+      } else process.stderr.write(`${message}\n`);
+    }
   };
   try {
     if (options.codexTimeout) parseDuration(options.codexTimeout);
@@ -106,7 +114,14 @@ program.action(async (selectors: string[], options: GlobalOptions) => {
         verbose,
       });
     if (useTui(options, process.stdin.isTTY, process.stdout.isTTY)) {
-      const summary = await runTui({ collect, intervalMs, color: options.color });
+      dashboardActive = true;
+      let summary;
+      try {
+        summary = await runTui({ collect, intervalMs, color: options.color });
+      } finally {
+        dashboardActive = false;
+        for (const message of deferredVerbose) process.stderr.write(`${message}\n`);
+      }
       if (process.exitCode !== 130 && process.exitCode !== 143)
         process.exitCode = summary?.exitCode ?? 0;
       return;

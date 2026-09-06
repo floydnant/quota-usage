@@ -62,7 +62,7 @@ async function fixture() {
 describe('background checkout updater', () => {
   it('fast-forwards main and installs a staged build, then skips rebuilding unchanged revisions', async () => {
     const f = await fixture();
-    await updateCheckout(f.root, f.state, f.run);
+    expect(await updateCheckout(f.root, f.state, f.run)).toBe('updated');
     expect(await readFile(join(f.root, 'version.txt'), 'utf8')).toBe('new');
     expect(await readFile(join(f.root, 'dist', 'cli.js'), 'utf8')).toBe('new build');
     expect(await readFile(join(f.root, 'node_modules', 'version'), 'utf8')).toBe('new deps');
@@ -71,7 +71,7 @@ describe('background checkout updater', () => {
       (await f.git(f.root, ['worktree', 'list', '--porcelain'])).match(/worktree /g),
     ).toHaveLength(1);
     expect(f.npmCalls).toHaveLength(2);
-    await updateCheckout(f.root, f.state, f.run);
+    expect(await updateCheckout(f.root, f.state, f.run)).toBeUndefined();
     expect(f.npmCalls).toHaveLength(2);
     await expect(stat(join(f.state, 'lock'))).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(stat(join(f.state, 'failure.json'))).rejects.toMatchObject({ code: 'ENOENT' });
@@ -181,6 +181,51 @@ describe('background checkout updater', () => {
     await expect(
       runUpdateCommand(join(f.home, 'missing-executable'), [], f.home, 100),
     ).rejects.toMatchObject({ failure: 'worker' });
+  });
+
+  it('reports an installed update once on close and stays quiet when no update is needed', async () => {
+    const f = await fixture();
+    const messages: string[] = [];
+    const options = {
+      enabled: true,
+      root: f.root,
+      stateDir: f.state,
+      run: f.run,
+      report: (message: string) => {
+        messages.push(message);
+      },
+    };
+    const update = startAutoUpdate(options);
+    try {
+      await expect
+        .poll(() => readFile(join(f.root, 'dist', 'cli.js'), 'utf8').catch(() => ''))
+        .toBe('new build');
+      expect(messages).toEqual([]);
+    } finally {
+      await update.close();
+    }
+    await update.close();
+    expect(messages).toEqual([
+      'usage: CLI updated successfully; the new version will be used on the next run.',
+    ]);
+    messages.length = 0;
+    let checked = false;
+    const unchanged = startAutoUpdate({
+      ...options,
+      run: async (...args) => {
+        const result = await f.run(...args);
+        if (args[1][0] === 'rev-parse' && args[1][1] === 'FETCH_HEAD') checked = true;
+        return result;
+      },
+    });
+    try {
+      await expect
+        .poll(async () => checked && !(await stat(join(f.state, 'lock')).catch(() => undefined)))
+        .toBe(true);
+    } finally {
+      await unchanged.close();
+    }
+    expect(messages).toEqual([]);
   });
 
   it('reports completed failures only on close and only once', async () => {

@@ -123,7 +123,7 @@ export async function updateCheckout(
   stateDir: string,
   run: UpdateCommand = runUpdateCommand,
   signal?: AbortSignal,
-): Promise<UpdateFailure | undefined> {
+): Promise<'updated' | UpdateFailure | undefined> {
   const lock = join(stateDir, 'lock');
   const owner = randomUUID();
   let staging: string | undefined;
@@ -223,6 +223,7 @@ export async function updateCheckout(
       throw new UpdateError('publish');
     }
     await unlink(pending);
+    return 'updated';
   } catch (error) {
     return error instanceof UpdateError ? error.failure : 'repository';
   } finally {

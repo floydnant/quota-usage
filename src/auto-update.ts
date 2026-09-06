@@ -35,9 +35,12 @@ export function startAutoUpdate(options: {
     close: () => {
       closing ??= (async () => {
         cancel();
-        const failure = await task;
-        if (failure) {
-          const message = `usage: auto-update failed: ${UPDATE_FAILURES[failure]}`;
+        const result = await task;
+        if (result) {
+          const message =
+            result === 'updated'
+              ? 'usage: CLI updated successfully; the new version will be used on the next run.'
+              : `usage: auto-update failed: ${UPDATE_FAILURES[result]}`;
           if (options.report) options.report(message);
           else process.stderr.write(`${message}\n`);
         }
