@@ -2,6 +2,7 @@ import { access, readFile, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { join } from 'node:path';
 import { cachePath, readCache } from './cache.js';
+import { discoverAccounts, loadAccountConfig } from './discovery.js';
 import { ConfigStore } from './config.js';
 import { parseDuration } from './duration.js';
 import {
@@ -21,11 +22,25 @@ export interface DoctorCheck {
   detail: string;
 }
 
-export async function doctor(store = new ConfigStore(appPaths())): Promise<DoctorCheck[]> {
+export async function doctor(
+  store = new ConfigStore(appPaths()),
+  options: { discover?: boolean } = {},
+): Promise<DoctorCheck[]> {
   const checks: DoctorCheck[] = [];
   let config;
   try {
-    config = await store.load();
+    config = await loadAccountConfig(store);
+    if (options.discover !== false) {
+      const inventory = await discoverAccounts(config.accounts, store.paths.homeDir);
+      config = { ...config, accounts: inventory.accounts };
+      checks.push(
+        ...inventory.errors.map((error) => ({
+          name: 'account discovery',
+          ok: false,
+          detail: error.message,
+        })),
+      );
+    }
     checks.push({ name: 'configuration', ok: true, detail: 'valid schema version 1' });
   } catch (error) {
     checks.push({
@@ -154,8 +169,11 @@ export async function doctor(store = new ConfigStore(appPaths())): Promise<Docto
         account.label,
         now,
         parseDuration(config.defaults.staleAfter),
+        account.discoveryKey,
       );
-      const info = await stat(cachePath(store.paths, account.provider, account.label));
+      const info = await stat(
+        cachePath(store.paths, account.provider, account.label, account.discoveryKey),
+      );
       const mode = info.mode & 0o777;
       checks.push({
         name: `${account.provider}:${account.label} cache`,

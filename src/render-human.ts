@@ -45,21 +45,36 @@ function windowLabel(window: QuotaWindow): string {
 }
 
 function windowOrder(a: QuotaWindow, b: QuotaWindow): number {
-  return a.id.localeCompare(b.id);
+  return (
+    (a.durationSeconds ?? Infinity) - (b.durationSeconds ?? Infinity) || a.id.localeCompare(b.id)
+  );
 }
 
 function sourceLabel(result: AccountResult): string {
   if (result.status === 'live') return '';
-  if (result.status === 'unavailable') return 'unavailable';
+  if (result.status === 'unavailable')
+    return result.error?.code === 'logged_out_account' ? 'auth failed' : 'unavailable';
   if (result.status === 'expired') return 'expired';
   const age = formatDuration(result.cacheAgeSeconds ?? 0);
-  return `${result.status} ${age} ago`;
+  return `${result.status} ${age} ago${result.error?.code === 'logged_out_account' ? ' · auth failed' : ''}`;
 }
 
-function resetLabel(window: QuotaWindow, now: Date): { text: string; prominent: boolean } {
-  if (!window.resetAt) return { text: 'reset unknown', prominent: false };
+function resetLabel(
+  window: QuotaWindow,
+  now: Date,
+  color = false,
+): { text: string; formatted: string } {
+  const parts = (prefix: string, relative = '', suffix = '') => {
+    // Reset intensity only, preserving the enclosing red reached-limit row.
+    const dim = (text: string): string => (color && text ? `${ANSI.dim}${text}\u001b[22m` : text);
+    return {
+      text: prefix + relative + suffix,
+      formatted: dim(prefix) + relative + dim(suffix),
+    };
+  };
+  if (!window.resetAt) return parts('reset unknown');
   const reset = Date.parse(window.resetAt);
-  if (!Number.isFinite(reset)) return { text: 'reset unknown', prominent: false };
+  if (!Number.isFinite(reset)) return parts('reset unknown');
   const remainingMs = reset - now.getTime();
   const relative = formatDuration(remainingMs / 1_000);
   const time = new Intl.DateTimeFormat(undefined, {
@@ -67,21 +82,15 @@ function resetLabel(window: QuotaWindow, now: Date): { text: string; prominent: 
     minute: '2-digit',
     hour12: false,
   }).format(new Date(reset));
-  if (remainingMs < 86_400_000) {
-    return { text: `resets in ${relative}, ${time}`, prominent: false };
-  }
+  if (remainingMs < 86_400_000) return parts('resets in ', relative, `, ${time}`);
   const date = new Intl.DateTimeFormat(undefined, {
     weekday: 'short',
     month: 'short',
     day: 'numeric',
   }).format(new Date(reset));
-  const prominent = remainingMs >= 3 * 86_400_000;
-  return {
-    text: prominent
-      ? `resets ${date} at ${time}  (in ${relative})`
-      : `resets in ${relative}, ${date} at ${time}`,
-    prominent,
-  };
+  return remainingMs >= 3 * 86_400_000
+    ? parts(`resets ${date} at ${time}  (in `, relative, ')')
+    : parts('resets in ', relative, `, ${date} at ${time}`);
 }
 
 export function renderHuman(
@@ -94,28 +103,41 @@ export function renderHuman(
   const sorted = [...results].sort(
     (a, b) => a.provider.localeCompare(b.provider) || a.label.localeCompare(b.label),
   );
+  const labelWidth = Math.max(
+    0,
+    ...sorted.flatMap((result) => result.windows.map((window) => windowLabel(window).length)),
+  );
+  const resetWidth = Math.max(
+    0,
+    ...sorted.flatMap((result) =>
+      result.windows.map((window) => resetLabel(window, now).text.length),
+    ),
+  );
   const lines: string[] = [];
   for (const result of sorted) {
-    const metadata = [
-      result.provider + ':' + result.label + ANSI.dim,
-      result.plan,
-      sourceLabel(result),
-    ]
-      .filter(Boolean)
-      .join(' ');
     const headingColor =
-      result.status === 'expired' || result.status === 'unavailable'
+      result.status === 'expired' ||
+      result.status === 'unavailable' ||
+      result.error?.code === 'logged_out_account'
         ? 'red'
         : result.status === 'stale'
           ? 'yellow'
           : 'green';
-    lines.push(tint(metadata, headingColor, color));
+    const metadata = [
+      tint(result.directoryName ?? `${result.provider}:${result.label}`, headingColor, color),
+      result.plan ? tint(result.plan, 'dim', color) : undefined,
+      tint(sourceLabel(result), headingColor, color && Boolean(sourceLabel(result))),
+    ]
+      .filter(Boolean)
+      .join(' ');
+    lines.push(metadata);
 
     if (result.status === 'unavailable' || !result.windows.length) {
-      lines.push(`  ${tint(result.error?.message ?? 'Unavailable', 'red', color)}`);
+      lines.push(
+        `  ${tint(result.error?.code === 'logged_out_account' ? 'Login needed. Sign in with the official provider CLI for this directory.' : (result.error?.message ?? 'Unavailable'), 'red', color)}`,
+      );
     } else {
       const windows = [...result.windows].sort(windowOrder);
-      const labelWidth = Math.max(...windows.map((window) => windowLabel(window).length));
       for (const window of windows) {
         const percent = Math.round(window.usedPercent);
         const reached = window.reached || window.usedPercent >= 100;
@@ -126,27 +148,75 @@ export function renderHuman(
               ? 'yellow'
               : 'green';
         const suffix = reached ? '  LIMIT REACHED' : '';
-        const reset = resetLabel(window, now);
+        const reset = resetLabel(window, now, color);
+        const plain =
+          `  ${windowLabel(window).padEnd(labelWidth)}  ${quotaBar(window.usedPercent)}  ${String(percent).padStart(3)}% used  ${reset.formatted}${' '.repeat(resetWidth - reset.text.length)}${suffix}`.trimEnd();
         lines.push(
-          `  ${windowLabel(window).padEnd(labelWidth)}  ${tint(quotaBar(window.usedPercent), barColor, color)}  ${String(percent).padStart(3)}% used  ${tint(reset.text, 'bold', color && reset.prominent)}${tint(suffix, 'red', color)}`,
+          reached
+            ? tint(plain, 'red', color)
+            : `  ${windowLabel(window).padEnd(labelWidth)}  ${tint(quotaBar(window.usedPercent), barColor, color)}  ${String(percent).padStart(3)}% used  ${reset.formatted}`,
         );
       }
-      if (result.credits) {
-        const details = [
-          result.credits.available === undefined
-            ? undefined
-            : `${result.credits.available} reset ${result.credits.available === 1 ? 'credit' : 'credits'}`,
-          result.credits.balance === undefined
-            ? undefined
-            : `${result.credits.balance}${result.credits.unit ? ` ${result.credits.unit}` : ''}`,
-        ].filter(Boolean);
-        if (details.length) lines.push(`  Credits: ${details.join(', ')}`);
+    }
+    if (result.credits) {
+      const credits = result.credits;
+      if (credits.available !== undefined) {
+        lines.push(`  Reset credits: ${credits.available} available`);
+      }
+      const rows = (credits.details ?? [])
+        .filter((row) => 'expiresAt' in row || 'resetType' in row || 'status' in row)
+        .map((row) => {
+          const value = row.expiresAt;
+          const expires =
+            typeof value === 'number'
+              ? value * 1_000
+              : typeof value === 'string'
+                ? Date.parse(value)
+                : NaN;
+          return { row, expires };
+        })
+        .sort(
+          (a, b) =>
+            (Number.isFinite(a.expires) ? a.expires : Infinity) -
+            (Number.isFinite(b.expires) ? b.expires : Infinity),
+        );
+      const width = Math.max(
+        0,
+        ...rows.map(({ row }) => String(row.title ?? 'Reset credit').length),
+      );
+      for (const { row, expires } of rows) {
+        const remaining = expires - now.getTime();
+        const expiry = Number.isFinite(expires)
+          ? `${remaining <= 0 ? 'expired' : 'expires'} ${new Intl.DateTimeFormat(undefined, {
+              year: 'numeric',
+              month: 'short',
+              day: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit',
+              hour12: false,
+            }).format(new Date(expires))}`
+          : row.expiresAt === null
+            ? 'no expiration'
+            : 'expiration unknown';
+        const line = `  ${String(row.title ?? 'Reset credit').padEnd(width)}  ${expiry}${row.status ? `  ${row.status}` : ''}`;
+        lines.push(tint(line, 'dim', color && !(remaining > 0 && remaining < 7 * 86_400_000)));
+      }
+      if (credits.balance !== undefined) {
+        lines.push(`  Credits: ${credits.balance}${credits.unit ? ` ${credits.unit}` : ''}`);
       }
     }
     lines.push('');
   }
-  if (!sorted.length && errors.length) {
-    for (const error of errors) lines.push(tint(error.message, 'red', color));
+  if (!sorted.length && !errors.length)
+    lines.push('No subscription directories or registered accounts found.');
+  for (const error of errors) {
+    const represented = sorted.some(
+      (result) =>
+        result.provider === error.provider &&
+        result.label === error.accountLabel &&
+        result.error?.code === error.code,
+    );
+    if (!represented) lines.push(tint(error.message, 'red', color));
   }
   return lines.join('\n').trimEnd();
 }

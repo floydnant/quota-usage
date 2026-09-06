@@ -64,3 +64,23 @@ describe('doctor and uninstall', () => {
     expect(await store.load()).toMatchObject({ schemaVersion: 1 });
   });
 });
+
+it('removes discovered quota caches without requiring a registration file', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'uninstall-discovered-'));
+  const store = new ConfigStore(appPaths(home));
+  const stateDir = join(home, '.codex-work');
+  await mkdir(stateDir);
+  await writeFile(join(stateDir, 'keep'), 'vendor');
+  await mkdir(store.paths.cacheDir, { recursive: true });
+  const cached = join(store.paths.cacheDir, 'codex-work-directoryhash.json');
+  await writeFile(cached, '{}');
+  let prompts = 0;
+  await uninstall(store, async () => {
+    prompts += 1;
+    return true;
+  });
+  expect(prompts).toBe(1);
+  await expect(readFile(cached)).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(await readFile(join(stateDir, 'keep'), 'utf8')).toBe('vendor');
+  expect(await store.exists()).toBe(false);
+});

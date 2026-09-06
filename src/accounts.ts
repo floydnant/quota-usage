@@ -15,6 +15,7 @@ import {
 } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { accountDirectoryName } from './selectors.js';
 import { cachePath } from './cache.js';
 import { ConfigStore, findAccount, validateLabel } from './config.js';
 import { parseDuration } from './duration.js';
@@ -348,12 +349,12 @@ export function listAccounts(config: UsageConfig, verbose = false): string {
   return [...config.accounts]
     .sort((a, b) => a.provider.localeCompare(b.provider) || a.label.localeCompare(b.label))
     .map((account) => {
-      const base = `${account.provider}:${account.label}  ${account.ownership}`;
+      const base = `${accountDirectoryName(account)}  ${account.discoveryKey ? 'auto-detected' : account.ownership}`;
       if (!verbose) return base;
       const metadata = account.identityMetadata
         ? `  unverified metadata: ${[account.identityMetadata.maskedEmail, account.identityMetadata.plan].filter(Boolean).join(', ')}`
         : '';
-      return `${base}\n  state: ${account.stateDir}${metadata}`;
+      return `${base}\n  alias: ${account.provider}:${account.label}\n  state: ${account.stateDir}${metadata}`;
     })
     .join('\n');
 }

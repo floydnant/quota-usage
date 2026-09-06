@@ -1,4 +1,5 @@
 import { readCache, writeCache } from './cache.js';
+import { discoverAccounts } from './discovery.js';
 import { parseDuration } from './duration.js';
 import { asUsageError, UsageError } from './errors.js';
 import { resolveExecutable } from './executable.js';
@@ -6,7 +7,7 @@ import { appPaths, type AppPaths } from './paths.js';
 import { ProcessTracker } from './processes.js';
 import { CodexAdapter } from './providers/codex.js';
 import { ClaudeLiveAdapter } from './providers/claude-live.js';
-import { selectAccounts } from './selectors.js';
+import { accountDirectoryName, selectAccounts } from './selectors.js';
 import type {
   AccountConfig,
   AccountResult,
@@ -18,6 +19,7 @@ import type {
 
 export interface CollectRequest {
   config: UsageConfig;
+  discover?: boolean;
   selectors: string[];
   mode: CollectionMode;
   paths?: AppPaths;
@@ -68,12 +70,33 @@ export async function collectUsage(request: CollectRequest): Promise<CollectionS
   const tracker = request.tracker ?? new ProcessTracker();
   const now = request.now ?? new Date();
   const staleMs = parseDuration(request.config.defaults.staleAfter);
-  const accounts = selectAccounts(request.config.accounts, request.selectors);
-  const errors: UsageErrorData[] = [];
+  const inventory =
+    request.discover === false
+      ? { accounts: request.config.accounts, errors: [] }
+      : await discoverAccounts(request.config.accounts, paths.homeDir);
+  const accounts = selectAccounts(inventory.accounts, request.selectors);
+  const errors: UsageErrorData[] = [...inventory.errors];
+  const finish = (results: AccountResult[]): CollectionSummary =>
+    summarize(
+      results.map((result) => {
+        const account = accounts.find(
+          (item) => item.provider === result.provider && item.label === result.label,
+        );
+        return account ? { ...result, directoryName: accountDirectoryName(account) } : result;
+      }),
+      errors,
+    );
 
   const collectCached = async (account: AccountConfig): Promise<AccountResult> => {
     try {
-      const cached = await readCache(paths, account.provider, account.label, now, staleMs);
+      const cached = await readCache(
+        paths,
+        account.provider,
+        account.label,
+        now,
+        staleMs,
+        account.discoveryKey,
+      );
       if (cached.status === 'expired') {
         const error = new UsageError(
           'expired_cache',
@@ -101,7 +124,7 @@ export async function collectUsage(request: CollectRequest): Promise<CollectionS
 
   if (request.mode === 'cached') {
     const results = await Promise.all(accounts.map(collectCached));
-    return summarize(results, errors);
+    return finish(results);
   }
 
   const codexAccounts = accounts.filter((account) => account.provider === 'codex');
@@ -149,7 +172,7 @@ export async function collectUsage(request: CollectRequest): Promise<CollectionS
   ): Promise<AccountResult> {
     try {
       const result = await task();
-      await writeCache(paths, result);
+      await writeCache(paths, result, account.discoveryKey);
       return result;
     } catch (error) {
       const code: ErrorCode = error instanceof UsageError ? error.data.code : 'provider_failure';
@@ -159,9 +182,18 @@ export async function collectUsage(request: CollectRequest): Promise<CollectionS
         accountLabel: account.label,
         retryable: false,
       });
+      liveError.provider = account.provider;
+      liveError.accountLabel = account.label;
       errors.push(liveError);
       try {
-        const cached = await readCache(paths, account.provider, account.label, now, staleMs);
+        const cached = await readCache(
+          paths,
+          account.provider,
+          account.label,
+          now,
+          staleMs,
+          account.discoveryKey,
+        );
         if (cached.status !== 'expired') {
           return {
             ...cached,
@@ -225,7 +257,7 @@ export async function collectUsage(request: CollectRequest): Promise<CollectionS
       );
     }
   }
-  return summarize([...codexResults, ...claudeResults], errors);
+  return finish([...codexResults, ...claudeResults]);
 }
 
 export function summarize(results: AccountResult[], errors: UsageErrorData[]): CollectionSummary {

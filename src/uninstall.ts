@@ -1,10 +1,11 @@
 import { readdir, unlink } from 'node:fs/promises';
+import { loadAccountConfig } from './discovery.js';
 import { ConfigStore } from './config.js';
 import { restoreClaudeCollector } from './accounts.js';
 import type { Confirm } from './prompt.js';
 
 export async function uninstallPreview(store: ConfigStore): Promise<string[]> {
-  const config = await store.load();
+  const config = await loadAccountConfig(store);
   const actions = config.accounts
     .filter((account) => account.provider === 'claude' && account.claudeCollector)
     .map(
@@ -13,7 +14,7 @@ export async function uninstallPreview(store: ConfigStore): Promise<string[]> {
     );
   actions.push(`Remove helper files beneath ${store.paths.binDir}`);
   actions.push(`Remove quota caches beneath ${store.paths.cacheDir}`);
-  actions.push(`Offer to remove ${store.paths.configFile}`);
+  if (await store.exists()) actions.push(`Offer to remove ${store.paths.configFile}`);
   actions.push('Leave every vendor state directory and login untouched');
   return actions;
 }
@@ -24,7 +25,7 @@ async function unlinkFiles(path: string): Promise<void> {
 }
 
 export async function uninstall(store: ConfigStore, confirm: Confirm): Promise<string[]> {
-  const config = await store.load();
+  const config = await loadAccountConfig(store);
   const preview = await uninstallPreview(store);
   if (!(await confirm(`${preview.map((item) => `- ${item}`).join('\n')}\nContinue?`)))
     return ['Uninstall preparation cancelled.'];
@@ -38,12 +39,14 @@ export async function uninstall(store: ConfigStore, confirm: Confirm): Promise<s
   await unlinkFiles(store.paths.binDir);
   await unlinkFiles(store.paths.cacheDir);
   messages.push('Removed usage helper files and quota caches.');
-  if (await confirm(`Remove configuration ${store.paths.configFile}?`)) {
-    await unlink(store.paths.configFile).catch(() => undefined);
-    await unlink(store.paths.backupFile).catch(() => undefined);
-    messages.push('Removed usage configuration and backup.');
-  } else {
-    messages.push('Kept usage configuration.');
+  if (await store.exists()) {
+    if (await confirm(`Remove configuration ${store.paths.configFile}?`)) {
+      await unlink(store.paths.configFile).catch(() => undefined);
+      await unlink(store.paths.backupFile).catch(() => undefined);
+      messages.push('Removed usage configuration and backup.');
+    } else {
+      messages.push('Kept usage configuration.');
+    }
   }
   if (config.accounts.some((account) => account.ownership === 'managed')) {
     messages.push(

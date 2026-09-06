@@ -168,7 +168,11 @@ function providerScreenError(
   text: string,
   account: Pick<AccountConfig, 'label'>,
 ): UsageError | null {
-  if (/log in|sign in|authentication required|not authenticated|unauthorized/i.test(text)) {
+  if (
+    /log in|sign in|not logged in|\/login|auth(?:entication)? (?:required|failed)|not authenticated|unauthorized/i.test(
+      text,
+    )
+  ) {
     return new UsageError('logged_out_account', `Claude account ${account.label} is logged out`, {
       provider: 'claude',
       accountLabel: account.label,
@@ -282,6 +286,10 @@ export function parseClaudePrintResult(
       retryable: true,
       cause: error,
     });
+  }
+  if (envelope.is_error === true && typeof envelope.result === 'string') {
+    const screenError = providerScreenError(envelope.result, account);
+    if (screenError) throw screenError;
   }
   if (envelope.is_error === true || typeof envelope.result !== 'string') {
     throw new UsageError('parse_failure', 'Claude returned an incomplete usage response', {

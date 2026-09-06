@@ -46,6 +46,7 @@ export interface Credits {
 }
 
 export interface AccountResult {
+  directoryName?: string;
   provider: Provider;
   label: string;
   plan?: string;
@@ -72,6 +73,10 @@ export interface AccountConfig {
   label: string;
   stateDir: string;
   ownership: Ownership;
+  /** Runtime-only display name; never written to registration YAML. */
+  directoryName?: string;
+  /** Runtime-only discovery marker; never written to registration YAML. */
+  discoveryKey?: string;
   claudeDefault?: boolean;
   ownershipMarker?: string;
   identityHash?: string;

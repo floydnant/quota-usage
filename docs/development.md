@@ -41,18 +41,19 @@ status-line configuration, or quota endpoints. Follow existing patterns:
 
 The high-value test files are:
 
-| Change                                  | Start with                                           |
-| --------------------------------------- | ---------------------------------------------------- |
-| YAML schema, atomic writes, permissions | `test/config.test.ts`                                |
-| Registration, collector, purge          | `test/accounts.test.ts`                              |
-| Selection and sorting                   | `test/selectors.test.ts`                             |
-| Freshness and timestamp races           | `test/cache.test.ts`                                 |
-| Process/signal cleanup                  | `test/processes.test.ts`                             |
-| Codex protocol and retry                | `test/codex-flow.test.ts`, `test/providers.test.ts`  |
-| Claude noninteractive usage             | `test/claude-live.test.ts`, `test/providers.test.ts` |
-| Fallback and exit codes                 | `test/collect.test.ts`                               |
-| Human/JSON contracts                    | `test/render.test.ts`                                |
-| Tarball contents and installed bin      | `test/package.test.ts`                               |
+| Change                                  | Start with                                                                     |
+| --------------------------------------- | ------------------------------------------------------------------------------ |
+| YAML schema, atomic writes, permissions | `test/config.test.ts`                                                          |
+| Registration, collector, purge          | `test/accounts.test.ts`                                                        |
+| Selection and sorting                   | `test/selectors.test.ts`                                                       |
+| Freshness and timestamp races           | `test/cache.test.ts`                                                           |
+| Process/signal cleanup                  | `test/processes.test.ts`                                                       |
+| Codex protocol and retry                | `test/codex-flow.test.ts`, `test/providers.test.ts`                            |
+| Claude noninteractive usage             | `test/claude-live.test.ts`, `test/providers.test.ts`                           |
+| Fallback and exit codes                 | `test/collect.test.ts`                                                         |
+| Directory inventory                     | `test/discovery.test.ts`, `test/discovery-cli.test.ts`, `test/collect.test.ts` |
+| Human/JSON contracts                    | `test/render.test.ts`, `test/tui.test.ts`                                      |
+| Tarball contents and installed bin      | `test/package.test.ts`                                                         |
 
 Coverage is configured in `vitest.config.ts`. The branch threshold applies to
 configuration, selectors, cache, process cleanup, and provider adapters; keep
@@ -93,7 +94,9 @@ touched.
 
 Human output must remain useful without color. JSON changes must preserve one
 valid document and `schemaVersion`; incompatible public changes require an
-explicit schema decision. Keep warnings/diagnostics on stderr.
+explicit schema decision. Keep warnings/diagnostics on stderr. Dashboard tests use fake terminal streams,
+fake clocks, and stub collections to verify refresh scheduling and terminal
+restoration without touching real accounts.
 
 ## Safe diagnostics
 
@@ -120,3 +123,9 @@ For Claude live issues, diagnose in this order:
 5. Confirm Git is clean and no provider or test child remains.
 6. Tag/publish only when separately authorized. Never publish as a side effect
    of verification.
+
+Discovery tests must supply a temporary home through `appPaths(tempHome)`. CLI tests
+isolate the child process home and use cached/list commands or fake executables.
+Cover matching names, directory additions/removals, explicit-registration precedence,
+symlink deduplication, cache isolation when a directory changes, and logged-out rows
+beside successful results. Never infer login by opening credential files.

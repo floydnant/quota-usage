@@ -1,6 +1,6 @@
 # quota-usage
 
-`quota-usage` is a macOS command-line tool that reports ChatGPT Codex and Claude Code subscription quota windows across multiple locally registered accounts. The executable is named `usage`.
+`quota-usage` is a macOS command-line tool that reports ChatGPT Codex and Claude Code subscription quota windows across automatically detected and explicitly registered accounts. The executable is named `usage`.
 
 It reports subscription allowance usage, reset times, plan metadata, and provider-supplied credits. It does **not** report API billing, API spend, token costs, or API rate limits. High usage and reached limits are information only; there are no thresholds and no `check` command.
 
@@ -36,7 +36,37 @@ The npm package ships compiled JavaScript, source maps, declarations, this READM
 
 ## Set up accounts
 
-Accounts are independent provider registrations. Labels are unique within a provider and use lowercase ASCII letters, digits, underscores, or hyphens. Uppercase labels are rejected.
+`usage` automatically discovers immediate home directories named `~/.codex-<label>/`
+and `~/.claude-<label>/`. Usage headings match the directory names, such as `.codex-work` and
+`.claude-personal`. The default directories appear simply as `.codex` and `.claude`. No registration file is required.
+Every matching directory stays visible, including logged-out accounts: live
+collection shows **auth failed** and a login-needed message when the provider
+reports an authentication failure. Other failures retain their own error messages;
+successful accounts remain visible.
+
+Discovery scans directory names and metadata only, without reading credentials or
+changing vendor settings. It runs for every collection (including dashboard
+refreshes), `accounts list`, and `doctor`. Adding or removing a matching directory
+updates the next inventory automatically. `accounts list` is a local inventory;
+login and quota availability are checked during live collection. `--cached` scans
+and reads caches only, so it cannot check current login state.
+
+Suffixes use the same lowercase label rules below. Discovery is nonrecursive and
+matches both the default and hyphenated names. Defaults use the internal selector label `default`;
+if a separate suffixed directory also uses that label, it receives an available
+numbered suffix such as `default-2`. Display names always remain the directory names. Directory symlinks are resolved and deduplicated; broken links
+and files are ignored. Explicit registrations take precedence when either the
+provider/label or the canonical state path overlaps. Use `--no-discover` to show
+only explicit registrations.
+
+Discovered accounts are external state and are never added to `config.yaml`.
+Claude discovery preserves normal default mode for `~/.claude` and uses isolated
+mode for suffixed directories. It does not install a status-line collector. Live collection populates a cache; explicit Claude registration remains
+available if you want a collector. Discovered caches are tied to the canonical
+directory and its filesystem identity, so replacing a directory or retargeting an
+alias cannot reuse another directory's reading.
+
+Explicit accounts are independent provider registrations. Labels are unique within a provider and use lowercase ASCII letters, digits, underscores, or hyphens. Uppercase labels are rejected.
 
 Register the effective default vendor state directory:
 
@@ -73,18 +103,33 @@ Claude setup previews its `settings.json` status-line change and asks for confir
 usage
 usage codex
 usage claude
+usage .codex
+usage .codex-work .claude-personal
 usage codex:personal
 usage codex:personal claude:work
 usage --cached
+usage --plain
+usage --tui --refresh 30s
 usage --json
 ```
 
-With no selector, every configured account is checked. A provider selector chooses every account for that provider. Multiple selectors are accepted and overlapping selections are deduplicated.
+With no selector, every discovered and explicitly configured account is checked. A provider selector chooses every account for that provider. Multiple selectors are accepted and overlapping selections are deduplicated.
+You can filter by displayed directory name, including an explicitly registered
+arbitrary directory's basename. Existing `provider:label` selectors remain valid:
+`codex:work` selects `.codex-work`, and `codex:default` selects `.codex`.
+`personal` only selects an account actually labeled `personal`; it never aliases
+a default directory. An existing explicit label takes precedence. Bare `codex` and `claude` continue to select all accounts
+for that provider.
 
 Modes:
 
-- Default `usage`: collect Codex live and run Claude's noninteractive `/usage` command, sequentially, for every selected Claude account.
-- `usage --cached`: start no vendor process and perform no vendor version check.
+- Default `usage`: open an auto-refreshing foreground dashboard on interactive terminals; print one snapshot when input or output is redirected. Each refresh collects Codex live and runs Claude's noninteractive `/usage` command, sequentially, for every selected Claude account.
+- `usage --cached`: start no vendor process and perform no vendor version check. In the dashboard, reread caches at each refresh.
+- `usage --plain`: print one aligned human-readable snapshot and exit.
+- `usage --tui`: explicitly select the dashboard; requires interactive input and output.
+- `usage --json`: print one JSON document and exit.
+
+The dashboard refreshes one minute after each completed collection. Set `--refresh 30s` to change this interval (minimum one second). Press `r` to refresh, `q` to quit, or ↑/↓ (also `k`/`j`) to scroll. Refreshes never overlap. Quitting waits for the current collection to finish and restores the terminal. Narrow terminals clip long rows; widen the terminal to see full reset dates. The dashboard runs only while `usage` is open; it is not a background service.
 
 Codex checks run with at most four accounts in parallel. Claude live checks run one at a time.
 
@@ -92,6 +137,10 @@ Global collection options:
 
 ```text
 --cached
+--no-discover
+--plain
+--tui
+--refresh <duration>
 --json
 --verbose
 --debug-file <path>
@@ -104,19 +153,21 @@ Durations accept values such as `10s`, `1m`, and `1.5m`. Defaults are 10 seconds
 
 ## Output
 
-Human output has one heading per account, one 20-character bar per active window, and shorter known durations first. Window labels and percentages align within each account. Fractional blocks keep low values such as 3% visible without rounding them to a full 5% cell:
+Human output has a directory-name heading with a dimmed subscription name per account, one 20-character bar per active window, and shorter known durations first. Window labels, bars, percentages, and reset columns align across all accounts. Fractional blocks keep low values such as 3% visible without rounding them to a full 5% cell:
 
 ```text
-Codex  personal  Plus  live
+.codex plus
   5h  [████▊░░░░░░░░░░░░░░░]   24% used  resets in 2h 14m, 18:40
   7d  [████████████▎░░░░░░░]   61% used  resets Mon, Aug 31 at 23:00  (in 4d 3h)
 
-Claude  work  Max  cached 4m ago
+.claude-work max cached 4m ago
   5h  [████████████████▍░░░]   82% used  resets in 47m, 17:13
   7d  [███████▊░░░░░░░░░░░░]   39% used  resets Mon, Aug 31 at 04:00  (in 3d 8h)
 ```
 
-Green is below 60% used, yellow is 60–79%, and red begins at 80%. `LIMIT REACHED` appears when the provider marks a window reached or usage reaches 100%. Reset dates three or more days away move before the countdown and appear bold in color output. Stale data is yellow and expired or unavailable data is red. Output remains fully understandable without color. Unavailable accounts remain in sorted position and never get a fake zero bar.
+Green is below 60% used, yellow is 60–79%, and red begins at 80%. `LIMIT REACHED` appears when the provider marks a window reached or usage reaches 100%, and the entire window row is red. Relative reset countdowns stand out; reset labels, absolute dates and times, and `reset unknown` are dimmed. Reset dates three or more days away move before the countdown. Stale data is yellow and expired or unavailable data is red. Output remains fully understandable without color. Unavailable accounts remain in sorted position and never get a fake zero bar.
+
+Reset credits appear one per row, sorted by expiration date, with a full local date and time. Rows are dimmed unless expiration is strictly less than seven days in the future. Expired credits remain labeled and dimmed; credits without expiration or with unknown dates follow dated credits. When only a count is supplied, it is shown without inventing expiration dates. Paid credit balances remain separate.
 
 Every cached result shows age. A reading becomes stale after 15 minutes. If every reported reset time has passed, it is expired and unusable. A provider that omits reset time remains usable, becomes stale after 15 minutes, and displays `reset unknown`.
 
@@ -135,6 +186,7 @@ Warnings and verbose diagnostics go to standard error. Results go to standard ou
     {
       "provider": "codex",
       "label": "personal",
+      "directoryName": ".codex",
       "plan": "plus",
       "source": "codex-app-server",
       "status": "live",
@@ -156,7 +208,7 @@ Warnings and verbose diagnostics go to standard error. Results go to standard ou
 }
 ```
 
-Provider percentages remain exact numeric values in JSON. Credits or paid extra usage are separate fields and are never combined with percentages.
+JSON retains `provider` and `label` for selector compatibility and adds `directoryName` for display. Provider percentages remain exact numeric values in JSON. Credits or paid extra usage are separate fields and are never combined with percentages.
 
 Stable initial error codes are:
 
@@ -189,7 +241,7 @@ usage doctor
 usage uninstall
 ```
 
-`accounts list --verbose` shows safe state paths and labels provider identity details as **unverified metadata**. There is no rename command in version 1; remove and register a new label instead.
+`accounts list` marks inferred entries as `auto-detected`. `accounts list --verbose` shows colon selector aliases, safe state paths and labels provider identity details as **unverified metadata**. There is no rename command in version 1; remove and register a new label instead.
 
 `accounts revalidate` is Codex-only. It displays old and new masked, non-secret metadata, asks for confirmation, and records a new email hash. Plan changes alone never trigger an identity mismatch.
 
@@ -248,6 +300,11 @@ Cache:          ~/Library/Caches/usage/
 Application directories use mode `0700`. Configuration, backup, ownership, collector-backup, and cache files use `0600`. YAML has top-level `schemaVersion: 1`, is completely validated before use, rejects unknown fields with their YAML path, and supports careful manual edits. Writes are atomic and retain one previous backup.
 
 ## Removal, purge, and uninstall
+
+`accounts remove` acts on explicit registrations only. A matching directory is
+still discovered after its registration is removed. Rename or move it outside the
+matching pattern to stop discovering it, or use `--no-discover` for a command.
+Logging out keeps the directory in the inventory with an authentication failure.
 
 Normal removal restores a Claude status line only when the current setting still matches the wrapper installed by `usage`, removes registration and quota cache, and leaves vendor state and credentials untouched:
 

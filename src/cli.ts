@@ -5,6 +5,7 @@ import { Command, Option } from 'commander';
 import { addAccount, listAccounts, removeAccount, revalidateCodex } from './accounts.js';
 import { collectUsage } from './collect.js';
 import { ConfigStore } from './config.js';
+import { discoverAccounts, loadAccountConfig } from './discovery.js';
 import { doctor, renderDoctor } from './doctor.js';
 import { parseDuration } from './duration.js';
 import { asUsageError, UsageError } from './errors.js';
@@ -13,11 +14,16 @@ import { ProcessTracker } from './processes.js';
 import { confirm } from './prompt.js';
 import { renderHuman, type ColorMode } from './render-human.js';
 import { publicDocument, renderJson } from './render-json.js';
+import { runTui, useTui } from './tui.js';
 import { uninstall, uninstallPreview } from './uninstall.js';
 import type { CollectionMode } from './types.js';
 
 interface GlobalOptions {
   cached?: boolean;
+  discover: boolean;
+  tui?: boolean;
+  plain?: boolean;
+  refresh: string;
   json?: boolean;
   verbose?: boolean;
   debugFile?: string;
@@ -43,8 +49,17 @@ const program = new Command()
     '[selectors...]',
     'accounts or providers to collect (for example codex:personal claude)',
   )
+  .option('--no-discover', 'use only explicitly registered accounts')
   .option('--cached', 'read caches only; start no vendor process and perform no version check')
-  .option('--json', 'emit one versioned JSON document')
+  .addOption(new Option('--json', 'emit one versioned JSON document').conflicts('tui'))
+  .addOption(
+    new Option('--tui', 'auto-refresh dashboard (default on interactive terminals)').conflicts([
+      'plain',
+      'json',
+    ]),
+  )
+  .addOption(new Option('--plain', 'print one human-readable snapshot').conflicts('tui'))
+  .option('--refresh <duration>', 'dashboard refresh interval', '1m')
   .option('--verbose', 'write safe diagnostics to stderr')
   .option('--debug-file <path>', 'append redacted diagnostics to an owner-only file')
   .addOption(
@@ -66,19 +81,33 @@ program.action(async (selectors: string[], options: GlobalOptions) => {
   try {
     if (options.codexTimeout) parseDuration(options.codexTimeout);
     if (options.claudeTimeout) parseDuration(options.claudeTimeout);
+    const intervalMs = parseDuration(options.refresh);
+    if (intervalMs < 1_000 || intervalMs > 2_147_483_647)
+      throw new UsageError('invalid_configuration', 'Refresh interval must be between 1s and 24d');
+    if (options.tui && !(process.stdin.isTTY && process.stdout.isTTY))
+      throw new UsageError('invalid_configuration', '--tui requires interactive input and output');
     const mode: CollectionMode = options.cached ? 'cached' : 'default';
     const store = new ConfigStore(appPaths());
-    const config = await store.load();
     verbose(`mode=${mode}`);
-    const summary = await collectUsage({
-      config,
-      selectors,
-      mode,
-      tracker,
-      ...(options.codexTimeout ? { codexTimeout: options.codexTimeout } : {}),
-      ...(options.claudeTimeout ? { claudeTimeout: options.claudeTimeout } : {}),
-      verbose,
-    });
+    const collect = async () =>
+      collectUsage({
+        config: await loadAccountConfig(store),
+        paths: store.paths,
+        discover: options.discover,
+        selectors,
+        mode,
+        tracker,
+        ...(options.codexTimeout ? { codexTimeout: options.codexTimeout } : {}),
+        ...(options.claudeTimeout ? { claudeTimeout: options.claudeTimeout } : {}),
+        verbose,
+      });
+    if (useTui(options, process.stdin.isTTY, process.stdout.isTTY)) {
+      const summary = await runTui({ collect, intervalMs, color: options.color });
+      if (process.exitCode !== 130 && process.exitCode !== 143)
+        process.exitCode = summary?.exitCode ?? 0;
+      return;
+    }
+    const summary = await collect();
     if (options.json) {
       process.stdout.write(renderJson(publicDocument(mode, summary.results, summary.errors)));
     } else {
@@ -149,12 +178,20 @@ accounts
 
 accounts
   .command('list')
-  .description('List registered accounts')
+  .description('List registered and auto-detected accounts')
   .option('--verbose', 'show safe paths and unverified provider metadata')
   .action(async (options: { verbose?: boolean }) => {
     try {
-      const config = await new ConfigStore().load();
-      process.stdout.write(`${listAccounts(config, options.verbose)}\n`);
+      const store = new ConfigStore();
+      const config = await loadAccountConfig(store);
+      const inventory = program.opts<GlobalOptions>().discover
+        ? await discoverAccounts(config.accounts, store.paths.homeDir)
+        : { accounts: config.accounts, errors: [] };
+      process.stdout.write(
+        `${listAccounts({ ...config, accounts: inventory.accounts }, options.verbose || program.opts<GlobalOptions>().verbose)}\n`,
+      );
+      for (const error of inventory.errors) process.stderr.write(`${error.message}\n`);
+      if (inventory.errors.length) process.exitCode = inventory.accounts.length ? 1 : 2;
     } catch (error) {
       process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
       process.exitCode = 2;
@@ -200,7 +237,9 @@ program
   .command('doctor')
   .description('Run read-only configuration, vendor, collector, cache, and ownership checks')
   .action(async () => {
-    const checks = await doctor();
+    const checks = await doctor(new ConfigStore(), {
+      discover: program.opts<GlobalOptions>().discover,
+    });
     process.stdout.write(`${renderDoctor(checks)}\n`);
     process.exitCode = checks.every((check) => check.ok) ? 0 : 1;
   });

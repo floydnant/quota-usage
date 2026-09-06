@@ -9,13 +9,15 @@ a change belongs. User-facing behavior and commands are documented in the
 
 ```text
 src/cli.ts
-  -> ConfigStore loads and validates config.yaml
+  -> loadAccountConfig loads/validates optional config.yaml (in-memory defaults if absent)
+  -> discoverAccounts merges immediate provider-prefixed home directories with registrations
   -> selectors choose registered accounts
   -> collectUsage coordinates mode, concurrency, fallback, and exit code
        -> CodexAdapter: fresh JSONL app-server child per account
        -> ClaudeLiveAdapter: owned noninteractive CLI child, sequentially
        -> cache: explicit cached mode and live-failure fallback
-  -> renderHuman or renderJson writes stdout
+  -> foreground TUI repeats collection on interactive terminals (no overlapping checks)
+  -> renderHuman or renderJson writes stdout for one-shot output
   -> ProcessTracker cleans every owned process on all exit paths
 ```
 
@@ -24,20 +26,21 @@ document to stdout and must never contain progress text or ANSI escapes.
 
 ## Module map
 
-| Area           | Primary files                                               | Responsibility                                                                      |
-| -------------- | ----------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| CLI wiring     | `src/cli.ts`                                                | Commander options and commands, output routing, signal cleanup                      |
-| Public model   | `src/types.ts`, `src/errors.ts`                             | Normalized quotas, account/config types, stable error contract                      |
-| Configuration  | `src/config.ts`, `src/paths.ts`                             | Strict YAML validation, atomic writes, permissions, canonical paths                 |
-| Accounts       | `src/accounts.ts`                                           | Registration, identity setup, Claude collector install/restore, removal/purge       |
-| Collection     | `src/collect.ts`, `src/selectors.ts`                        | Selection, concurrency, cache fallback, result sorting, exit aggregation            |
-| Process safety | `src/processes.ts`, `src/executable.ts`                     | Executable resolution, scrubbed vendor environments, owned-child lifecycle          |
-| Codex          | `src/providers/codex.ts`                                    | JSON-RPC handshake, identity verification, rate-limit normalization, retry boundary |
-| Claude cache   | `src/providers/claude-cache.ts`, `src/statusline-helper.ts` | Status-line extraction, chaining, atomic cache updates                              |
-| Claude live    | `src/providers/claude-live.ts`                              | Noninteractive `/usage` execution, JSON envelope and named-row parsing              |
-| Cache          | `src/cache.ts`                                              | Atomic newest-reading writes, freshness and expiration                              |
-| Presentation   | `src/render-human.ts`, `src/render-json.ts`                 | Stable human and JSON contracts                                                     |
-| Diagnostics    | `src/doctor.ts`, `src/uninstall.ts`                         | Read-only health checks and safe cleanup previews/actions                           |
+| Area           | Primary files                                               | Responsibility                                                                             |
+| -------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| CLI wiring     | `src/cli.ts`                                                | Commander options and commands, output routing, signal cleanup                             |
+| Public model   | `src/types.ts`, `src/errors.ts`                             | Normalized quotas, account/config types, stable error contract                             |
+| Configuration  | `src/config.ts`, `src/paths.ts`                             | Strict YAML validation, atomic writes, permissions, canonical paths                        |
+| Accounts       | `src/accounts.ts`                                           | Registration, identity setup, Claude collector install/restore, removal/purge              |
+| Discovery      | `src/discovery.ts`                                          | Directory inventory, explicit-registration precedence, directory-specific cache identities |
+| Collection     | `src/collect.ts`, `src/selectors.ts`                        | Selection, concurrency, cache fallback, result sorting, exit aggregation                   |
+| Process safety | `src/processes.ts`, `src/executable.ts`                     | Executable resolution, scrubbed vendor environments, owned-child lifecycle                 |
+| Codex          | `src/providers/codex.ts`                                    | JSON-RPC handshake, identity verification, rate-limit normalization, retry boundary        |
+| Claude cache   | `src/providers/claude-cache.ts`, `src/statusline-helper.ts` | Status-line extraction, chaining, atomic cache updates                                     |
+| Claude live    | `src/providers/claude-live.ts`                              | Noninteractive `/usage` execution, JSON envelope and named-row parsing                     |
+| Cache          | `src/cache.ts`                                              | Atomic newest-reading writes, freshness and expiration                                     |
+| Presentation   | `src/render-human.ts`, `src/render-json.ts`, `src/tui.ts`   | Stable human and JSON contracts                                                            |
+| Diagnostics    | `src/doctor.ts`, `src/uninstall.ts`                         | Read-only health checks and safe cleanup previews/actions                                  |
 
 ## Normalized data and errors
 
@@ -114,3 +117,46 @@ TypeScript compiles to `dist/` with JavaScript, declarations, and source maps.
 restricts the tarball to `dist/`, README, LICENSE, and package metadata. The
 packed-artifact test installs the tarball with production dependencies and runs
 its generated `usage` binary.
+
+## Interactive presentation
+
+The TUI is the default only when stdin and stdout are terminals. `--plain` and
+`--json` remain finite snapshots; `--cached` also applies to dashboard refreshes.
+`runTui` owns raw input, the alternate screen, scrolling, resize handling, and a
+bounded refresh timer. It restores terminal state in `finally` and drains an
+in-flight collection when quitting. Existing process tracking owns provider cleanup.
+Human window columns align across accounts. Reset-credit detail rows use the
+normalized credit fields, sort dated entries first, and emphasize only expirations
+strictly within the next seven days. JSON and cache schemas remain unchanged.
+
+## Directory inventory
+
+`discoverAccounts` runs for each collection, list, and doctor invocation. It only
+reads home directory entries, canonical paths, and filesystem metadata. It matches
+`.codex-<label>` and `.claude-<label>` with the existing lowercase label grammar;
+it also discovers `.codex` and `.claude` with the internal `default` label, preserving Claude default
+launch mode. Defaults precede suffixed names; inferred label collisions receive an
+available numbered suffix. Explicit labels and canonical
+paths win, and aliases are deduplicated per provider.
+
+Every matching directory is included before collection, regardless of login state.
+The adapters report live authentication/usage failures, while cached mode performs
+no vendor checks. Discovery errors do not discard explicit account results.
+`--no-discover` limits the effective inventory to registered accounts.
+
+Runtime `AccountConfig.discoveryKey` is a hash of the canonical path, device, inode,
+and creation timestamp. It is not an allowed YAML field. It scopes discovered cache
+filenames without altering the public result schema or credential handling. Explicit
+registrations retain existing cache paths and identity pinning. Discovered entries
+follow whatever subscription the official CLI currently has logged into that state
+and never install a Claude collector or persist registrations. Removing a directory
+removes its inferred row at the next scan; quota cache files are removed by uninstall.
+
+Human headings and `accounts list` use directory names. Runtime
+`AccountConfig.directoryName` preserves the discovered entry name even for a
+symlink; explicit registrations use their state directory basename. Collection
+attaches `directoryName` to public results for both live and cached output. JSON
+retains `provider` and `label`; the display field is additive to schema version 1.
+Selectors accept displayed directory names and existing colon aliases. The `default` alias falls back to a default directory if no actual account has
+that label. `personal` is never an implicit alias. Bare provider selectors continue to select every account
+for that provider.

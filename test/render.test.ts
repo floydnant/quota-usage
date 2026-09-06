@@ -91,7 +91,7 @@ describe('rendering', () => {
         env: {},
         now: new Date('2026-08-27T18:00:00Z'),
       }),
-    ).toContain('\u001b[1mresets');
+    ).toContain('\u001b[2mresets in \u001b[22m2h 14m\u001b[2m, ');
   });
 
   it('does not draw a fake unavailable bar', () => {
@@ -111,7 +111,7 @@ describe('rendering', () => {
       },
     };
     const text = renderHuman([unavailable], [], { color: 'never' });
-    expect(text).toContain('Claude  x  unavailable');
+    expect(text).toContain('claude:x unavailable');
     expect(text).not.toContain('unavailable 0s ago');
     expect(text).toContain('No cache');
     expect(text).not.toContain(quotaBar(0));
@@ -136,5 +136,71 @@ describe('rendering', () => {
       errors: [{ code: 'timeout' }],
     });
     expect(text.trim().startsWith('{')).toBe(true);
+  });
+});
+
+describe('table and reset credits', () => {
+  const now = new Date('2026-08-27T18:00:00Z');
+  const window = result.windows[0];
+  if (!window) throw new Error('Missing fixture window');
+  it('colors the entire reached row red without nested resets', () => {
+    const text = renderHuman([{ ...result, windows: [{ ...window, reached: true }] }], [], {
+      color: 'always',
+      env: {},
+      now,
+    });
+    const row = text.split('\n')[1] ?? '';
+    expect(row.startsWith('\u001b[31m  7d')).toBe(true);
+    expect(row.endsWith('LIMIT REACHED\u001b[0m')).toBe(true);
+    expect(row.split('\u001b[0m')).toHaveLength(2);
+  });
+  it('aligns window columns across accounts', () => {
+    const text = renderHuman(
+      [result, { ...result, label: 'work', windows: [{ ...window, label: 'Long window' }] }],
+      [],
+      { color: 'never', now },
+    );
+    const columns = text
+      .split('\n')
+      .filter((line) => line.includes('% used'))
+      .map((line) => line.indexOf('['));
+    expect(new Set(columns).size).toBe(1);
+  });
+  it('sorts each credit by expiration, handles missing dates, and dims outside the next week', () => {
+    const credit = (title: string, days: number) => ({
+      title,
+      expiresAt: (now.getTime() + days * 86_400_000) / 1_000,
+      status: 'available',
+    });
+    const text = renderHuman(
+      [
+        {
+          ...result,
+          windows: [],
+          credits: {
+            available: 6,
+            details: [
+              credit('Week', 7),
+              credit('Soon', 6),
+              credit('Expired', -1),
+              { title: 'Forever', expiresAt: null },
+              { title: 'Unknown', expiresAt: 'invalid' },
+              credit('Today', 0.1),
+            ],
+          },
+        },
+      ],
+      [],
+      { color: 'always', env: {}, now },
+    );
+    expect(text.indexOf('Expired')).toBeLessThan(text.indexOf('Today'));
+    expect(text.indexOf('Today')).toBeLessThan(text.indexOf('Soon'));
+    expect(text.indexOf('Soon')).toBeLessThan(text.indexOf('Week'));
+    expect(text).toContain('\u001b[2m  Week');
+    expect(text).toContain('\u001b[2m  Expired');
+    expect(text).not.toContain('\u001b[2m  Soon');
+    expect(text).toContain('2026');
+    expect(text).toContain('no expiration');
+    expect(text).toContain('expiration unknown');
   });
 });

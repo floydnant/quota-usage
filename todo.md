@@ -29,3 +29,25 @@ invariants in [`AGENTS.md`](AGENTS.md) when designing any item.
 - [ ] Revalidate Codex app-server and Claude noninteractive/status-line fixtures when the
       supported vendor versions change.
 - [ ] Recheck npm package-name availability immediately before publication.
+
+## Completed output improvements
+
+- [x] Color the whole quota row red when a limit is reached.
+- [x] Align quota columns across accounts.
+- [x] Default to a foreground auto-refreshing TUI on interactive terminals, with
+      explicit TUI/plain modes and finite redirected/JSON output.
+- [x] Show one row per reset credit, sorted by expiration, dimmed except for
+      credits expiring in less than seven days.
+
+## Completed account inventory
+
+- [x] Infer subscriptions from immediate `~/.codex-<label>` and `~/.claude-<label>`
+      directories, plus the bare defaults, while retaining arbitrary
+      explicit registrations.
+- [x] Rescan at each refresh, preserve logged-out rows with `auth failed`, and keep
+      successful accounts visible alongside failures.
+- [x] Deduplicate canonical paths, prefer explicit registrations, and isolate
+      discovered caches by directory identity.
+
+- [x] Display directory names and accept them as filters while retaining colon
+      aliases and explicit `default` selectors; `personal` requires an actual label.

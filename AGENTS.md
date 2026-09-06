@@ -13,6 +13,15 @@ API rate-limit tool. The binary is `usage`; the package is `quota-usage`.
 These invariants are settled:
 
 - Do not add a daemon, resident service, threshold, or `check` command.
+- The foreground TUI defaults only on interactive terminals. Keep `--plain`,
+  redirected output, and `--json` finite; dashboard refreshes must not overlap.
+- Discover `~/.codex` and `~/.claude` as defaults, plus immediate
+  `~/.codex-<label>` and `~/.claude-<label>` directories, without
+  reading credentials or installing collectors. Keep detected logged-out accounts
+  visible, prefer explicit registrations on label/path collisions, and never
+  persist runtime discovery entries into registration YAML. Display directory
+  names while preserving colon selector aliases. Only `default` can alias a
+  default directory; `personal` must be an actual account label.
 - High usage and reached limits never cause a failure exit code.
 - Preserve successful account results when another account fails.
 - Never read or expose credentials, OAuth tokens, API keys, Claude Keychain

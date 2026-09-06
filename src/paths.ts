@@ -5,6 +5,7 @@ import { UsageError } from './errors.js';
 import type { Provider } from './types.js';
 
 export interface AppPaths {
+  homeDir: string;
   configDir: string;
   configFile: string;
   backupFile: string;
@@ -19,6 +20,7 @@ export function appPaths(home = homedir()): AppPaths {
   const configDir = join(home, '.config', 'usage');
   const dataDir = join(home, '.local', 'share', 'usage');
   return {
+    homeDir: home,
     configDir,
     configFile: join(configDir, 'config.yaml'),
     backupFile: join(configDir, 'config.yaml.bak'),

@@ -5,8 +5,13 @@ import { UsageError } from './errors.js';
 import { ensurePrivateDir, type AppPaths } from './paths.js';
 import type { AccountResult, Provider } from './types.js';
 
-export function cachePath(paths: AppPaths, provider: Provider, label: string): string {
-  return join(paths.cacheDir, `${provider}-${label}.json`);
+export function cachePath(
+  paths: AppPaths,
+  provider: Provider,
+  label: string,
+  discoveryKey?: string,
+): string {
+  return join(paths.cacheDir, `${provider}-${label}${discoveryKey ? `-${discoveryKey}` : ''}.json`);
 }
 
 export function withFreshness(
@@ -34,8 +39,9 @@ export async function readCache(
   label: string,
   now: Date,
   staleAfterMs: number,
+  discoveryKey?: string,
 ): Promise<AccountResult> {
-  const path = cachePath(paths, provider, label);
+  const path = cachePath(paths, provider, label, discoveryKey);
   let raw: string;
   try {
     raw = await readFile(path, 'utf8');
@@ -62,9 +68,13 @@ export async function readCache(
   }
 }
 
-export async function writeCache(paths: AppPaths, result: AccountResult): Promise<boolean> {
+export async function writeCache(
+  paths: AppPaths,
+  result: AccountResult,
+  discoveryKey?: string,
+): Promise<boolean> {
   await ensurePrivateDir(paths.cacheDir);
-  const path = cachePath(paths, result.provider, result.label);
+  const path = cachePath(paths, result.provider, result.label, discoveryKey);
   const existing = await readFile(path, 'utf8')
     .then((text) => JSON.parse(text) as AccountResult)
     .catch(() => undefined);

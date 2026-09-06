@@ -37,3 +37,48 @@ describe('selectors', () => {
     ).toEqual([]);
   });
 });
+
+it('accepts directory names and keeps colon/default aliases without shadowing explicit labels', () => {
+  const detected: AccountConfig[] = [
+    {
+      provider: 'codex',
+      label: 'default',
+      directoryName: '.codex',
+      stateDir: '/home/.codex',
+      ownership: 'external',
+    },
+    {
+      provider: 'codex',
+      label: 'work',
+      directoryName: '.codex-work',
+      stateDir: '/elsewhere/state',
+      ownership: 'external',
+    },
+    {
+      provider: 'claude',
+      label: 'client',
+      stateDir: '/elsewhere/client-state',
+      ownership: 'external',
+    },
+  ];
+  expect(parseSelector('.codex')).toEqual({ provider: 'codex', directoryName: '.codex' });
+  expect(
+    selectAccounts(detected, ['.codex', 'codex:default']).map((account) => account.label),
+  ).toEqual(['default']);
+  expect(
+    selectAccounts(detected, ['.codex-work', 'codex:work']).map((account) => account.label),
+  ).toEqual(['work']);
+  expect(
+    selectAccounts(detected, ['client-state', 'claude:client']).map((account) => account.label),
+  ).toEqual(['client']);
+  expect(selectAccounts(detected, ['codex'])).toHaveLength(2);
+  expect(() => selectAccounts(detected, ['.claude-missing'])).toThrow('Unknown account');
+  expect(() => selectAccounts(detected, ['codex:personal'])).toThrow('Unknown account');
+  const explicit: AccountConfig = {
+    provider: 'codex',
+    label: 'personal',
+    stateDir: '/arbitrary',
+    ownership: 'external',
+  };
+  expect(selectAccounts([...detected, explicit], ['codex:personal'])).toEqual([explicit]);
+});
