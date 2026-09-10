@@ -43,7 +43,7 @@ describe('rendering', () => {
     expect(text).not.toContain('\u001b[');
     expect(text.indexOf('5h')).toBeLessThan(text.indexOf('7d'));
     expect(text).toContain('24% used');
-    expect(text).toMatch(/resets .+ at \d{2}:\d{2} {2}\(in 4d\)/);
+    expect(text).toMatch(/resets in 4d, .+ at \d{2}:\d{2}/);
   });
 
   it('aligns bars and percentages within an account', () => {
@@ -92,6 +92,90 @@ describe('rendering', () => {
         now: new Date('2026-08-27T18:00:00Z'),
       }),
     ).toContain('\u001b[2mresets in \u001b[22m2h 14m\u001b[2m, ');
+  });
+
+  it('hides Bengalfox rows without affecting alignment or JSON', () => {
+    const hidden: AccountResult = {
+      ...result,
+      windows: [
+        ...result.windows,
+        {
+          id: 'codex_bengalfox:secondary',
+          label: 'Hidden long weekly label',
+          remainingPercent: 0,
+          durationSeconds: 604800,
+          usedPercent: 100,
+        },
+      ],
+    };
+    const options = { color: 'always' as const, env: {}, now: new Date(result.collectedAt) };
+    expect(renderHuman([hidden], [], options)).toBe(renderHuman([result], [], options));
+    expect(JSON.parse(renderJson(publicDocument('default', [hidden], [])))).toMatchObject({
+      results: [{ windows: hidden.windows }],
+    });
+    const onlyHidden = renderHuman([{ ...hidden, windows: hidden.windows.slice(2) }], [], options);
+    expect(onlyHidden).not.toContain('Unavailable');
+    expect(onlyHidden).not.toContain('% used');
+  });
+
+  it.each(['codex', 'claude'] as const)(
+    'colors every visible row of the same %s account red when any limit is reached',
+    (provider) => {
+      for (const duration of [18000, 604800]) {
+        for (const limit of [{ reached: true }, { usedPercent: 100 }]) {
+          const limited: AccountResult = {
+            ...result,
+            provider,
+            windows: result.windows.map((window) =>
+              window.durationSeconds === duration ? { ...window, ...limit } : window,
+            ),
+          };
+          const options = { color: 'always' as const, env: {}, now: new Date(result.collectedAt) };
+          const rows = renderHuman([limited, { ...result, provider, label: 'work' }], [], options)
+            .split('\n')
+            .filter((line) => line.includes('% used'));
+          expect(rows.slice(0, 2).every((row) => row.startsWith('\u001b[31m'))).toBe(true);
+          expect(rows.slice(2).some((row) => row.startsWith('\u001b[31m'))).toBe(false);
+          expect(rows.filter((row) => row.includes('LIMIT REACHED'))).toHaveLength(1);
+          expect(renderHuman([limited], [], { ...options, env: { NO_COLOR: '' } })).not.toContain(
+            '\u001b[',
+          );
+        }
+      }
+      const text = renderHuman([result], [], {
+        color: 'always',
+        env: {},
+        now: new Date(result.collectedAt),
+      });
+      expect(text).toContain('\u001b[2mresets in \u001b[22m4d\u001b[2m, ');
+    },
+  );
+
+  it('emphasizes weekly reset weekdays, including resets less than a day away', () => {
+    const window = result.windows[0];
+    if (!window) throw new Error('Missing fixture window');
+    for (const resetAt of ['2026-08-31T18:00:00Z', '2026-08-27T20:00:00Z']) {
+      const weekly = { ...window, resetAt, reached: true };
+      const now = new Date(result.collectedAt);
+      const weekday = new Intl.DateTimeFormat(undefined, { weekday: 'short' }).format(
+        new Date(resetAt),
+      );
+      const colored = renderHuman([{ ...result, windows: [weekly] }], [], {
+        color: 'always',
+        env: {},
+        now,
+      });
+      expect(colored).toContain(`\u001b[22m${weekday}\u001b[2m`);
+      const row = colored.split('\n')[1] ?? '';
+      expect(row.startsWith('\u001b[31m')).toBe(true);
+      expect(row.split('\u001b[0m')).toHaveLength(2);
+      const plain = renderHuman([{ ...result, windows: [weekly] }], [], {
+        color: 'never',
+        now,
+      });
+      expect(plain).toContain(weekday);
+      expect(plain).not.toContain('\u001b[');
+    }
   });
 
   it('does not draw a fake unavailable bar', () => {
@@ -200,6 +284,12 @@ describe('table and reset credits', () => {
     expect(text).toContain('\u001b[2m  Expired');
     expect(text).not.toContain('\u001b[2m  Soon');
     expect(text).toContain('2026');
+    expect(text).toContain('  Soon expires in 6d (');
+    expect(text).toContain('  Week expires in 7d (');
+    expect(text).toContain('  Expired expired 1d ago (');
+    expect(text).toContain('  Today expires in 2h 24m (');
+    expect(text).toContain('Reset credits: 6');
+    expect(text).not.toContain(' available');
     expect(text).toContain('no expiration');
     expect(text).toContain('expiration unknown');
   });

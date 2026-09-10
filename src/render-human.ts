@@ -44,6 +44,16 @@ function windowLabel(window: QuotaWindow): string {
   return window.id;
 }
 
+function visibleWindows(result: AccountResult): QuotaWindow[] {
+  return result.windows.filter(
+    (window) => !(result.provider === 'codex' && window.id.startsWith('codex_bengalfox:')),
+  );
+}
+
+function isReached(window: QuotaWindow): boolean {
+  return window.reached === true || window.usedPercent >= 100;
+}
+
 function windowOrder(a: QuotaWindow, b: QuotaWindow): number {
   return (
     (a.durationSeconds ?? Infinity) - (b.durationSeconds ?? Infinity) || a.id.localeCompare(b.id)
@@ -82,15 +92,22 @@ function resetLabel(
     minute: '2-digit',
     hour12: false,
   }).format(new Date(reset));
-  if (remainingMs < 86_400_000) return parts('resets in ', relative, `, ${time}`);
-  const date = new Intl.DateTimeFormat(undefined, {
+  const weekly = window.durationSeconds === 604_800;
+  if (remainingMs < 86_400_000 && !weekly) return parts('resets in ', relative, `, ${time}`);
+  const dateParts = new Intl.DateTimeFormat(undefined, {
     weekday: 'short',
     month: 'short',
     day: 'numeric',
-  }).format(new Date(reset));
-  return remainingMs >= 3 * 86_400_000
-    ? parts(`resets ${date} at ${time}  (in `, relative, ')')
-    : parts('resets in ', relative, `, ${date} at ${time}`);
+  }).formatToParts(new Date(reset));
+  const date = dateParts.map((part) => part.value).join('');
+  const label = parts('resets in ', relative, `, ${date} at ${time}`);
+  if (weekly && color) {
+    const highlightedDate = dateParts
+      .map((part) => (part.type === 'weekday' ? `\u001b[22m${part.value}${ANSI.dim}` : part.value))
+      .join('');
+    label.formatted = parts('resets in ', relative, `, ${highlightedDate} at ${time}`).formatted;
+  }
+  return label;
 }
 
 export function renderHuman(
@@ -105,7 +122,9 @@ export function renderHuman(
   );
   const labelWidth = Math.max(
     0,
-    ...sorted.flatMap((result) => result.windows.map((window) => windowLabel(window).length)),
+    ...sorted.flatMap((result) =>
+      visibleWindows(result).map((window) => windowLabel(window).length),
+    ),
   );
   const lines: string[] = [];
   for (const result of sorted) {
@@ -131,10 +150,11 @@ export function renderHuman(
         `  ${tint(result.error?.code === 'logged_out_account' ? 'Login needed. Sign in with the official provider CLI for this directory.' : (result.error?.message ?? 'Unavailable'), 'red', color)}`,
       );
     } else {
-      const windows = [...result.windows].sort(windowOrder);
+      const windows = visibleWindows(result).sort(windowOrder);
+      const accountReached = windows.some(isReached);
       for (const window of windows) {
         const percent = Math.round(window.usedPercent);
-        const reached = window.reached || window.usedPercent >= 100;
+        const reached = isReached(window);
         const barColor =
           reached || window.usedPercent >= 80
             ? 'red'
@@ -146,7 +166,7 @@ export function renderHuman(
         const plain =
           `  ${windowLabel(window).padEnd(labelWidth)}  ${quotaBar(window.usedPercent)}  ${String(percent).padStart(3)}% used  ${reset.formatted}${suffix}`.trimEnd();
         lines.push(
-          reached
+          accountReached
             ? tint(plain, 'red', color)
             : `  ${windowLabel(window).padEnd(labelWidth)}  ${tint(quotaBar(window.usedPercent), barColor, color)}  ${String(percent).padStart(3)}% used  ${reset.formatted}`,
         );
@@ -155,7 +175,7 @@ export function renderHuman(
     if (result.credits) {
       const credits = result.credits;
       if (credits.available !== undefined) {
-        lines.push(`  Reset credits: ${credits.available} available`);
+        lines.push(`  Reset credits: ${credits.available}`);
       }
       const rows = (credits.details ?? [])
         .filter((row) => 'expiresAt' in row || 'resetType' in row || 'status' in row)
@@ -174,25 +194,24 @@ export function renderHuman(
             (Number.isFinite(a.expires) ? a.expires : Infinity) -
             (Number.isFinite(b.expires) ? b.expires : Infinity),
         );
-      const width = Math.max(
-        0,
-        ...rows.map(({ row }) => String(row.title ?? 'Reset credit').length),
-      );
       for (const { row, expires } of rows) {
         const remaining = expires - now.getTime();
         const expiry = Number.isFinite(expires)
-          ? `${remaining <= 0 ? 'expired' : 'expires'} ${new Intl.DateTimeFormat(undefined, {
-              year: 'numeric',
-              month: 'short',
-              day: 'numeric',
-              hour: '2-digit',
-              minute: '2-digit',
-              hour12: false,
-            }).format(new Date(expires))}`
+          ? `${remaining <= 0 ? `expired ${formatDuration(-remaining / 1_000)} ago` : `expires in ${formatDuration(remaining / 1_000)}`} (${new Intl.DateTimeFormat(
+              undefined,
+              {
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false,
+              },
+            ).format(new Date(expires))})`
           : row.expiresAt === null
             ? 'no expiration'
             : 'expiration unknown';
-        const line = `  ${String(row.title ?? 'Reset credit').padEnd(width)}  ${expiry}${row.status ? `  ${row.status}` : ''}`;
+        const line = `  ${String(row.title ?? 'Reset credit')} ${expiry}${row.status && row.status !== 'available' ? ` ${row.status}` : ''}`;
         lines.push(tint(line, 'dim', color && !(remaining > 0 && remaining < 7 * 86_400_000)));
       }
       if (credits.balance !== undefined) {

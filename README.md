@@ -191,16 +191,18 @@ Human output has a directory-name heading with a dimmed subscription name per ac
 ```text
 .codex plus
   5h  [████▊░░░░░░░░░░░░░░░]   24% used  resets in 2h 14m, 18:40
-  7d  [████████████▎░░░░░░░]   61% used  resets Mon, Aug 31 at 23:00  (in 4d 3h)
+  7d  [████████████▎░░░░░░░]   61% used  resets in 4d 3h, Mon, Aug 31 at 23:00
 
 .claude-work max cached 4m ago
   5h  [████████████████▍░░░]   82% used  resets in 47m, 17:13
-  7d  [███████▊░░░░░░░░░░░░]   39% used  resets Mon, Aug 31 at 04:00  (in 3d 8h)
+  7d  [███████▊░░░░░░░░░░░░]   39% used  resets in 3d 8h, Mon, Aug 31 at 04:00
 ```
 
-Green is below 60% used, yellow is 60–79%, and red begins at 80%. `LIMIT REACHED` appears when the provider marks a window reached or usage reaches 100%, and the entire window row is red. The marker follows the reset text directly, without padding to a separate column. Relative reset countdowns stand out; reset labels, absolute dates and times, and `reset unknown` are dimmed. Reset dates three or more days away move before the countdown. Stale data is yellow and expired or unavailable data is red. Output remains fully understandable without color. Unavailable accounts remain in sorted position and never get a fake zero bar.
+Codex windows whose IDs start with `codex_bengalfox:` are hidden in human output (including the dashboard), but remain available in JSON. Hidden windows do not affect column widths or row colors.
 
-Reset credits appear one per row, sorted by expiration date, with a full local date and time. Rows are dimmed unless expiration is strictly less than seven days in the future. Expired credits remain labeled and dimmed; credits without expiration or with unknown dates follow dated credits. When only a count is supplied, it is shown without inventing expiration dates. Paid credit balances remain separate.
+Green is below 60% used, yellow is 60–79%, and red begins at 80%. `LIMIT REACHED` appears when the provider marks a window reached or usage reaches 100%, and the entire window row is red. When any visible limit is reached, all quota rows for the same account are red for both Codex and Claude; their percentages and own `LIMIT REACHED` markers remain unchanged. The marker follows the reset text directly, without padding to a separate column. Relative reset countdowns stand out; reset labels, absolute dates and times, and `reset unknown` are dimmed. Relative reset countdowns always appear before absolute dates and times. The 7d reset weekday is also highlighted and remains visible even when the reset is less than a day away. Stale data is yellow and expired or unavailable data is red. Output remains fully understandable without color. Unavailable accounts remain in sorted position and never get a fake zero bar.
+
+Reset credits appear one per row, sorted by expiration date, with relative expiration first and the full local date and time in parentheses. Labels use a single space before expiration text, and the redundant `available` status is omitted. Rows are dimmed unless expiration is strictly less than seven days in the future. Expired credits remain labeled and dimmed; credits without expiration or with unknown dates follow dated credits. When only a count is supplied, it is shown without inventing expiration dates. Paid credit balances remain separate.
 
 Every cached result shows age. A reading becomes stale after 15 minutes. If every reported reset time has passed, it is expired and unusable. A provider that omits reset time remains usable, becomes stale after 15 minutes, and displays `reset unknown`.
 

@@ -135,8 +135,16 @@ frames never exceed its height. Warnings are deduplicated and printed after term
 restoration so stderr does not scroll the dashboard. CLI verbose diagnostics are
 also deferred while the dashboard is active, retaining the last 1,000 entries;
 debug-file logging remains immediate. Existing process tracking owns provider cleanup.
-Human window columns align across accounts. Reset-credit detail rows use the
-normalized credit fields, sort dated entries first, and emphasize only expirations
+Human window columns align across accounts. The human renderer excludes Codex
+`codex_bengalfox:` windows before layout and color decisions, retaining them in
+normalized results, caches, and JSON. Any reached visible window colors all quota rows for the same
+account red without changing their usage or reached state. Reset countdowns always
+precede absolute dates and remain emphasized while surrounding reset text is dimmed.
+Seven-day windows also emphasize the localized weekday, including resets within a day;
+intensity changes preserve reached-row colors. Reset-credit detail rows use the
+normalized credit fields, sort dated entries first, show relative expiration before
+the parenthesized local date with unpadded labels, omit the `available` status,
+and emphasize only expirations
 strictly within the next seven days. JSON and cache schemas remain unchanged.
 
 ## Directory inventory

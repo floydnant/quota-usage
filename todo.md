@@ -32,6 +32,15 @@ invariants in [`AGENTS.md`](AGENTS.md) when designing any item.
 
 ## Completed output improvements
 
+- [x] Highlight the 7d reset weekday alongside its relative countdown.
+
+- [x] Lead reset-credit expirations with relative time, remove label padding, and
+      omit redundant `available` text.
+
+- [x] Hide `codex_bengalfox:` windows in human output while preserving JSON.
+- [x] Color all of an account’s quota rows red when any visible limit is reached.
+- [x] Always lead quota resets with the emphasized relative countdown.
+
 - [x] Avoid dashboard flicker by updating only changed rows and deferring warnings
       until terminal restoration.
 - [x] Group dashboard frames with synchronized-output markers and keep verbose
