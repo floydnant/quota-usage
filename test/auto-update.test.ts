@@ -6,6 +6,9 @@ import { describe, expect, it } from 'vitest';
 import { startAutoUpdate } from '../src/auto-update.js';
 import { runUpdateCommand, updateCheckout, type UpdateCommand } from '../src/update-checkout.js';
 
+// Real git worktrees are slow to spawn on Windows; the default one-second poll is too tight.
+const POLL = { timeout: 10_000 };
+
 async function fixture() {
   const home = await realpath(await mkdtemp(join(tmpdir(), 'usage-updater-')));
   const root = join(home, 'checkout');
@@ -198,7 +201,7 @@ describe('background checkout updater', () => {
     const update = startAutoUpdate(options);
     try {
       await expect
-        .poll(() => readFile(join(f.root, 'dist', 'cli.js'), 'utf8').catch(() => ''))
+        .poll(() => readFile(join(f.root, 'dist', 'cli.js'), 'utf8').catch(() => ''), POLL)
         .toBe('new build');
       expect(messages).toEqual([]);
     } finally {
@@ -220,7 +223,10 @@ describe('background checkout updater', () => {
     });
     try {
       await expect
-        .poll(async () => checked && !(await stat(join(f.state, 'lock')).catch(() => undefined)))
+        .poll(
+          async () => checked && !(await stat(join(f.state, 'lock')).catch(() => undefined)),
+          POLL,
+        )
         .toBe(true);
     } finally {
       await unchanged.close();
@@ -291,11 +297,13 @@ describe('background checkout updater', () => {
     });
     try {
       await expect
-        .poll(() =>
-          stat(ready).then(
-            () => true,
-            () => false,
-          ),
+        .poll(
+          () =>
+            stat(ready).then(
+              () => true,
+              () => false,
+            ),
+          POLL,
         )
         .toBe(true);
       const pids = JSON.parse(await readFile(ready, 'utf8')) as number[];

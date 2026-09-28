@@ -1,6 +1,7 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import type { ChildProcess, ChildProcessWithoutNullStreams } from 'node:child_process';
 import { once } from 'node:events';
 import { UsageError } from './errors.js';
+import { killOwnedTree, spawnExecutable } from './platform.js';
 
 export interface OwnedProcess {
   pid?: number | undefined;
@@ -92,17 +93,16 @@ export async function runProcess(
     maxOutput?: number;
   },
 ): Promise<RunResult> {
-  const child = spawn(executable, args, {
+  const child = spawnExecutable(executable, args, {
     env: options.env,
     cwd: options.cwd,
-    shell: false,
     stdio: ['pipe', 'pipe', 'pipe'],
-  });
+  }) as ChildProcessWithoutNullStreams;
   const exited = once(child, 'exit');
   options.tracker.track({
     pid: child.pid,
     kill: (signal) => {
-      child.kill(signal);
+      killOwnedTree(child, signal);
     },
     exited,
   });
@@ -120,7 +120,7 @@ export async function runProcess(
   let timeoutHandle: NodeJS.Timeout | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeoutHandle = setTimeout(() => {
-      child.kill('SIGTERM');
+      killOwnedTree(child, 'SIGTERM');
       reject(
         new UsageError('timeout', `Process timed out after ${options.timeoutMs}ms`, {
           retryable: true,
@@ -135,7 +135,7 @@ export async function runProcess(
     ];
     return { stdout, stderr, code: code ?? 1 };
   } catch (error) {
-    child.kill('SIGKILL');
+    killOwnedTree(child, 'SIGKILL');
     await exited.catch(() => undefined);
     throw error;
   } finally {
@@ -147,7 +147,7 @@ export function childOwned(child: ChildProcess): OwnedProcess {
   return {
     ...(child.pid === undefined ? {} : { pid: child.pid }),
     kill: (signal) => {
-      child.kill(signal);
+      killOwnedTree(child, signal);
     },
     exited: once(child, 'exit'),
   };

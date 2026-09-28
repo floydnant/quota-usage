@@ -58,7 +58,7 @@ describe('directory inventory', () => {
     await mkdir(arbitrary);
     await mkdir(join(home, '.codex-work'));
     await mkdir(join(home, '.claude-work'));
-    await symlink(arbitrary, join(home, '.codex-alias'));
+    await symlink(arbitrary, join(home, '.codex-alias'), 'junction');
     const registered: AccountConfig[] = [
       {
         provider: 'codex',
@@ -91,10 +91,10 @@ describe('directory inventory', () => {
     const target = join(home, 'target');
     await mkdir(target);
     await writeFile(join(home, 'file'), 'file');
-    await symlink(target, join(home, '.codex-a'));
-    await symlink(target, join(home, '.codex-b'));
-    await symlink(join(home, 'missing'), join(home, '.claude-broken'));
-    await symlink(join(home, 'file'), join(home, '.claude-file'));
+    await symlink(target, join(home, '.codex-a'), 'junction');
+    await symlink(target, join(home, '.codex-b'), 'junction');
+    await symlink(join(home, 'missing'), join(home, '.claude-broken'), 'junction');
+    await symlink(join(home, 'file'), join(home, '.claude-file'), 'junction');
     const first = await discoverAccounts([], home);
     expect(first.accounts).toHaveLength(1);
     expect(first.accounts[0]?.stateDir).toBe(await realpath(target));
@@ -117,7 +117,7 @@ describe('directory inventory', () => {
     const second = (await discoverAccounts([], home)).accounts[0];
     expect(second?.discoveryKey).not.toBe(first?.discoveryKey);
     await rm(dir, { recursive: true });
-    await symlink(join(home, 'old'), dir);
+    await symlink(join(home, 'old'), dir, 'junction');
     expect((await discoverAccounts([], home)).accounts[0]?.discoveryKey).not.toBe(
       second?.discoveryKey,
     );

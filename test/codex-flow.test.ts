@@ -1,10 +1,11 @@
-import { chmod, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { CodexAdapter, identityHash } from '../src/providers/codex.js';
 import { ProcessTracker } from '../src/processes.js';
 import type { AccountConfig } from '../src/types.js';
+import { writeFakeExecutable } from './fake-executable.js';
 
 async function fakeCodex(mode: 'ok' | 'mismatch' | 'malformed' | 'hang' = 'ok'): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'fake-codex-'));
@@ -21,9 +22,7 @@ readline.on('line', line => {
   if (message.method === 'account/read') console.log(JSON.stringify({id:message.id,result:{account:{type:'chatgpt',email:${JSON.stringify(email)},planType:'plus'},requiresOpenaiAuth:true}}));
   if (message.method === 'account/rateLimits/read') console.log(JSON.stringify({id:message.id,result:{rateLimitsByLimitId:{codex:{limitId:'codex',primary:{usedPercent:25,windowDurationMins:300,resetsAt:1787875200},secondary:null,rateLimitReachedType:null}}}}));
 });`;
-  await writeFile(path, script);
-  await chmod(path, 0o700);
-  return path;
+  return writeFakeExecutable(path, script);
 }
 
 function account(): AccountConfig {

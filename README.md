@@ -1,16 +1,18 @@
 # quota-usage
 
-`quota-usage` is a macOS command-line tool that reports ChatGPT Codex and Claude Code subscription quota windows across automatically detected and explicitly registered accounts. The executable is named `usage`.
+`quota-usage` is a macOS and Windows command-line tool that reports ChatGPT Codex and Claude Code subscription quota windows across automatically detected and explicitly registered accounts. The executable is named `usage`.
 
 It reports subscription allowance usage, reset times, plan metadata, and provider-supplied credits. It does **not** report API billing, API spend, token costs, or API rate limits. High usage and reached limits are information only; there are no thresholds and no `check` command.
 
 ## Requirements
 
-- macOS on Apple Silicon or Intel
+- macOS on Apple Silicon or Intel, or Windows 10/11
 - Node.js 22 or newer
 - The official `codex` and/or `claude` CLI for the providers you use
 - Codex CLI 0.150.1 or newer
 - Claude Code 2.1.238 or newer for multi-account setup and live collection
+
+On Windows, npm-installed vendor CLIs (`codex.cmd`, `claude.cmd`) and native `.exe` installs are both found through `PATH`/`PATHEXT`. The Claude status-line collector is written as `node "<helper>" ...` with forward slashes, because Claude Code runs Windows status lines through Git Bash, or PowerShell when Git Bash is absent.
 
 The Codex protocol was verified against Codex CLI 0.150.1. Claude cached and live behavior was verified against Claude Code 2.1.250; this project retains 2.1.238 as the safe minimum for multi-account operations.
 
@@ -329,11 +331,11 @@ Configuration:  ~/.config/usage/config.yaml
 Backup:         ~/.config/usage/config.yaml.bak
 Managed state:  ~/.local/share/usage/accounts/
 Helper files:   ~/.local/share/usage/bin/
-Cache:          ~/Library/Caches/usage/
+Cache:          ~/Library/Caches/usage/ (Windows: ~/AppData/Local/usage/Cache/)
 Update state:   ~/.local/share/usage/updates/<checkout-hash>/
 ```
 
-Application directories use mode `0700`. Configuration, backup, ownership, collector-backup, and cache files use `0600`. YAML has top-level `schemaVersion: 1`, is completely validated before use, rejects unknown fields with their YAML path, and supports careful manual edits. Writes are atomic and retain one previous backup.
+Application directories use mode `0700`. Configuration, backup, ownership, collector-backup, and cache files use `0600`. YAML has top-level `schemaVersion: 1`, is completely validated before use, rejects unknown fields with their YAML path, and supports careful manual edits. Writes are atomic and retain one previous backup. Windows has no POSIX modes; there the files rely on the user profile's access control, and `usage doctor` skips mode checks.
 
 ## Removal, purge, and uninstall
 
@@ -356,7 +358,7 @@ If the user changed Claude's setting afterward, `usage` does not overwrite it. I
 usage accounts remove codex:client --purge
 ```
 
-It refuses default/external state, missing or mismatched ownership markers, symlinks, broad paths, and locations outside the managed root. After confirmation it asks the official vendor CLI to log out under the exact directory. If logout fails, state is not moved. A successful purge moves the directory to macOS Trash with a collision-safe name and reports that it is recoverable. There is no `--force`.
+It refuses default/external state, missing or mismatched ownership markers, symlinks, broad paths, and locations outside the managed root. After confirmation it asks the official vendor CLI to log out under the exact directory. If logout fails, state is not moved. A successful purge moves the directory to macOS Trash (on Windows, `~/.Trash` in the user profile) with a collision-safe name and reports that it is recoverable. There is no `--force`.
 
 Prepare for npm removal with:
 

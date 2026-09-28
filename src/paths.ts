@@ -1,7 +1,8 @@
 import { lstat, mkdir, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { UsageError } from './errors.js';
+import { isWindows } from './platform.js';
 import type { Provider } from './types.js';
 
 export interface AppPaths {
@@ -27,7 +28,9 @@ export function appPaths(home = homedir()): AppPaths {
     dataDir,
     managedRoot: join(dataDir, 'accounts'),
     binDir: join(dataDir, 'bin'),
-    cacheDir: join(home, 'Library', 'Caches', 'usage'),
+    cacheDir: isWindows
+      ? join(home, 'AppData', 'Local', 'usage', 'Cache')
+      : join(home, 'Library', 'Caches', 'usage'),
     trashDir: join(home, '.Trash'),
   };
 }
@@ -71,7 +74,7 @@ export async function assertSafeManagedTarget(
     );
   }
   const rel = relative(paths.managedRoot, target);
-  if (rel.startsWith('..') || isAbsolute(rel) || rel.split('/').length !== 2) {
+  if (rel.startsWith('..') || isAbsolute(rel) || rel.split(sep).length !== 2) {
     throw new UsageError('invalid_configuration', `Unsafe managed account path: ${target}`);
   }
   const stat = await lstat(target).catch(() => undefined);

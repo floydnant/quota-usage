@@ -104,12 +104,17 @@ keys and explicit OAuth-token environment variables are removed in both cases.
 ~/.local/share/usage/                directories 0700
 ~/.local/share/usage/accounts/       managed vendor state
 ~/.local/share/usage/bin/            compiled collector and owner-only backups
-~/Library/Caches/usage/              cache files 0600
+~/Library/Caches/usage/              cache files 0600 (Windows: ~/AppData/Local/usage/Cache/)
 ```
 
 Managed purge requires the exact expected path, no symlinks, a matching random
 ownership marker, successful official logout, and a collision-safe move to
-macOS Trash. External/default state is never purged.
+macOS Trash (`~/.Trash` on Windows). External/default state is never purged.
+
+On Windows, POSIX modes are not enforced; the user profile's ACLs protect these
+paths and `doctor` skips mode checks. Owned children are ended with
+`taskkill /T` because Windows has no process groups and a `.cmd` shim would
+otherwise leave the real vendor program running.
 
 ## Packaging
 

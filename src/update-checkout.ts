@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import {
   chmod,
@@ -12,8 +11,9 @@ import {
   unlink,
   writeFile,
 } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { UsageError } from './errors.js';
+import { findCommand, isWindows, killWindowsTree, spawnExecutable } from './platform.js';
 
 export const UPDATE_FAILURES = {
   dirty: 'working tree is dirty; commit or stash changes before updating',
@@ -50,7 +50,10 @@ export type UpdateCommand = (
   signal?: AbortSignal,
 ) => Promise<UpdateCommandResult>;
 
-/** Each command gets its own owned process group, including npm's descendants. */
+/**
+ * Each command gets its own owned process group, including npm's descendants.
+ * Windows has no process groups, so the owned tree is ended with taskkill instead.
+ */
 export const runUpdateCommand: UpdateCommand = (command, args, cwd, timeoutMs, signal) =>
   new Promise((resolve, reject) => {
     if (signal?.aborted) {
@@ -62,15 +65,16 @@ export const runUpdateCommand: UpdateCommand = (command, args, cwd, timeoutMs, s
         ([key]) => !key.startsWith('GIT_') && key !== 'npm_config_prefix',
       ),
     );
-    const child = spawn(command, args, {
+    const child = spawnExecutable(findCommand(command), args, {
       cwd,
-      detached: true,
+      // A detached Windows child gets its own console window instead of a group.
+      detached: !isWindows,
       stdio: ['ignore', 'pipe', 'ignore'],
       env: {
         ...env,
         GIT_TERMINAL_PROMPT: '0',
-        GIT_ASKPASS: '/usr/bin/false',
-        SSH_ASKPASS: '/usr/bin/false',
+        GIT_ASKPASS: isWindows ? 'false' : '/usr/bin/false',
+        SSH_ASKPASS: isWindows ? 'false' : '/usr/bin/false',
         GIT_SSH_COMMAND: 'ssh -o BatchMode=yes -o ConnectTimeout=10',
         npm_config_audit: 'false',
         npm_config_fund: 'false',
@@ -80,7 +84,9 @@ export const runUpdateCommand: UpdateCommand = (command, args, cwd, timeoutMs, s
     let timedOut = false;
     let escalation: NodeJS.Timeout | undefined;
     const kill = (signal: NodeJS.Signals): void => {
-      if (child.pid) {
+      if (child.pid && isWindows) {
+        if (child.exitCode === null && child.signalCode === null) killWindowsTree(child.pid);
+      } else if (child.pid) {
         try {
           process.kill(-child.pid, signal);
         } catch {
@@ -97,7 +103,7 @@ export const runUpdateCommand: UpdateCommand = (command, args, cwd, timeoutMs, s
       terminate();
     }, timeoutMs);
     signal?.addEventListener('abort', terminate, { once: true });
-    child.stdout.on('data', (data: Buffer) => {
+    child.stdout?.on('data', (data: Buffer) => {
       stdout = `${stdout}${data.toString()}`.slice(-256 * 1024);
     });
     const cleanup = (): void => {
@@ -164,7 +170,10 @@ export async function updateCheckout(
       throw error;
     }
     const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as { name?: string };
-    if (pkg.name !== 'quota-usage' || (await git(['rev-parse', '--show-toplevel'])) !== root)
+    if (
+      pkg.name !== 'quota-usage' ||
+      resolve(await git(['rev-parse', '--show-toplevel'])) !== resolve(root)
+    )
       throw new UpdateError('repository');
     if ((await git(['branch', '--show-current'])) !== 'main') throw new UpdateError('branch');
     if (await git(['status', '--porcelain', '--untracked-files=normal']))

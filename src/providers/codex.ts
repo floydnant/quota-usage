@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { once } from 'node:events';
 import { createInterface } from 'node:readline';
 import { UsageError } from '../errors.js';
 import { parseVersion, compareVersions, vendorEnvironment } from '../executable.js';
+import { killOwnedTree, spawnExecutable } from '../platform.js';
 import { childOwned, ProcessTracker, runProcess } from '../processes.js';
 import type {
   AccountConfig,
@@ -179,11 +180,10 @@ class JsonRpcSession {
     stateDir: string,
     private readonly tracker: ProcessTracker,
   ) {
-    this.child = spawn(executable, ['app-server', '--stdio'], {
-      shell: false,
+    this.child = spawnExecutable(executable, ['app-server', '--stdio'], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: vendorEnvironment('codex', stateDir),
-    });
+    }) as ChildProcessWithoutNullStreams;
     this.exited = once(this.child, 'exit');
     this.tracker.track(childOwned(this.child));
     const lines = createInterface({ input: this.child.stdout });
@@ -270,12 +270,12 @@ class JsonRpcSession {
       this.exited.catch(() => undefined),
       new Promise((r) => setTimeout(r, 300)),
     ]);
-    if (this.child.exitCode === null) this.child.kill('SIGTERM');
+    if (this.child.exitCode === null) killOwnedTree(this.child, 'SIGTERM');
     await Promise.race([
       this.exited.catch(() => undefined),
       new Promise((r) => setTimeout(r, 200)),
     ]);
-    if (this.child.exitCode === null) this.child.kill('SIGKILL');
+    if (this.child.exitCode === null) killOwnedTree(this.child, 'SIGKILL');
     await this.exited.catch(() => undefined);
   }
 }
@@ -355,7 +355,7 @@ export class CodexAdapter implements ProviderAdapter {
         operation(),
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
-            session.child.kill('SIGTERM');
+            killOwnedTree(session.child, 'SIGTERM');
             reject(
               new UsageError('timeout', `Codex check timed out for ${account.label}`, {
                 provider: 'codex',
