@@ -125,10 +125,36 @@ Extra usage balance remaining: $12.50`,
     ).toBe('2026-08-29T00:00:00.000Z');
   });
 
+  it('parses the comma-separated reset dates printed by Claude Code 2.1.284', () => {
+    const result = parseClaudeUsageText(
+      `You are currently using your subscription to power your Claude Code usage
+
+Current session: 2% used · resets Sep 29, 2:50am (Europe/Berlin)
+Current week (all models): 47% used · resets Oct 3, 2am (Europe/Berlin)`,
+      account,
+      new Date('2026-09-28T20:00:00Z'),
+    );
+    expect(result.windows).toMatchObject([
+      { id: 'five_hour', resetAt: '2026-09-29T00:50:00.000Z' },
+      { id: 'seven_day', resetAt: '2026-10-03T00:00:00.000Z' },
+    ]);
+  });
+
   it('rejects provider errors, unrelated percentages, and malformed envelopes', () => {
     expect(() => parseClaudeUsageText('Please log in to Claude Code', account)).toThrow(
       'logged out',
     );
+    // A logged-out Claude Code 2.1.284 answers /usage with the local cost summary only.
+    expect(() =>
+      parseClaudeUsageText(
+        `Total cost:            $0.0000
+Total duration (API):  0s
+Total duration (wall): 1s
+Total code changes:    0 lines added, 0 lines removed
+Usage:                 0 input, 0 output, 0 cache read, 0 cache write`,
+        account,
+      ),
+    ).toThrow('logged out');
     expect(() => parseClaudeUsageText('Failed to load usage data', account)).toThrow(
       'could not load',
     );

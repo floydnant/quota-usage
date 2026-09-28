@@ -65,7 +65,7 @@ function dateInZone(parts: LocalDateParts, timeZone: string): Date {
 
 function parseClaudeLocalReset(text: string, now: Date): Date | undefined {
   const match =
-    /reset(?:s|ting)?\s+(?:(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2})(?:,?\s+(\d{4}))?\s+(?:at\s+)?)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)(?:\s+\(([^)]+)\))?/i.exec(
+    /reset(?:s|ting)?\s+(?:(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2})(?:,?\s+(\d{4}))?,?\s+(?:at\s+)?)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)(?:\s+\(([^)]+)\))?/i.exec(
       text,
     );
   if (!match) return undefined;
@@ -171,7 +171,9 @@ function providerScreenError(
   if (
     /log in|sign in|not logged in|\/login|auth(?:entication)? (?:required|failed)|not authenticated|unauthorized/i.test(
       text,
-    )
+    ) ||
+    // Logged out, Claude Code 2.1.284 answers /usage with only the local cost summary.
+    (/^\s*Total cost:/m.test(text) && !/current (?:session|week)/i.test(text))
   ) {
     return new UsageError('logged_out_account', `Claude account ${account.label} is logged out`, {
       provider: 'claude',
