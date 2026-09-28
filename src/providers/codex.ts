@@ -174,6 +174,7 @@ class JsonRpcSession {
   private malformed: UsageError | undefined;
   readonly child: ChildProcessWithoutNullStreams;
   readonly exited: Promise<unknown>;
+  private readonly kills: Promise<void>[] = [];
 
   constructor(
     executable: string,
@@ -264,19 +265,24 @@ class JsonRpcSession {
     });
   }
 
+  /** Starts an owned tree kill that `close()` drains before it resolves. */
+  kill(signal: NodeJS.Signals): void {
+    this.kills.push(killOwnedTree(this.child, signal));
+  }
+
   async close(): Promise<void> {
     this.child.stdin.end();
     await Promise.race([
       this.exited.catch(() => undefined),
       new Promise((r) => setTimeout(r, 300)),
     ]);
-    if (this.child.exitCode === null) killOwnedTree(this.child, 'SIGTERM');
+    if (this.child.exitCode === null) this.kill('SIGTERM');
     await Promise.race([
       this.exited.catch(() => undefined),
       new Promise((r) => setTimeout(r, 200)),
     ]);
-    if (this.child.exitCode === null) killOwnedTree(this.child, 'SIGKILL');
-    await this.exited.catch(() => undefined);
+    if (this.child.exitCode === null) this.kill('SIGKILL');
+    await Promise.all([this.exited.catch(() => undefined), ...this.kills]);
   }
 }
 
@@ -355,7 +361,7 @@ export class CodexAdapter implements ProviderAdapter {
         operation(),
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
-            killOwnedTree(session.child, 'SIGTERM');
+            session.kill('SIGTERM');
             reject(
               new UsageError('timeout', `Codex check timed out for ${account.label}`, {
                 provider: 'codex',

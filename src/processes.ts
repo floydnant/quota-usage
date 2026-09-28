@@ -5,9 +5,16 @@ import { killOwnedTree, spawnExecutable } from './platform.js';
 
 export interface OwnedProcess {
   pid?: number | undefined;
-  kill(signal?: NodeJS.Signals): void;
+  /** May return a promise that settles when the kill operation has finished. */
+  kill(signal?: NodeJS.Signals): unknown;
   exited?: Promise<unknown>;
 }
+
+const settled = (value: unknown): Promise<void> =>
+  Promise.resolve(value).then(
+    () => undefined,
+    () => undefined,
+  );
 
 export class ProcessTracker {
   private readonly owned = new Set<OwnedProcess>();
@@ -35,7 +42,8 @@ export class ProcessTracker {
     this.cleaning = true;
     try {
       const processes = [...this.owned];
-      for (const process of processes) process.kill('SIGTERM');
+      // Windows tree kills run as their own taskkill processes; drain them too.
+      const kills = processes.map((process) => settled(process.kill('SIGTERM')));
       await Promise.all(
         processes.map(async (process) => {
           if (!process.exited) return;
@@ -46,13 +54,14 @@ export class ProcessTracker {
         }),
       );
       for (const process of processes) {
-        if (this.owned.has(process)) process.kill('SIGKILL');
+        if (this.owned.has(process)) kills.push(settled(process.kill('SIGKILL')));
       }
-      await Promise.all(
-        processes.flatMap((process) =>
+      await Promise.all([
+        ...kills,
+        ...processes.flatMap((process) =>
           process.exited ? [process.exited.catch(() => undefined)] : [],
         ),
-      );
+      ]);
       for (const process of processes) this.owned.delete(process);
     } finally {
       this.cleaning = false;
@@ -101,9 +110,7 @@ export async function runProcess(
   const exited = once(child, 'exit');
   options.tracker.track({
     pid: child.pid,
-    kill: (signal) => {
-      killOwnedTree(child, signal);
-    },
+    kill: (signal) => killOwnedTree(child, signal),
     exited,
   });
   let stdout = '';
@@ -118,9 +125,10 @@ export async function runProcess(
   if (options.input !== undefined) child.stdin.end(options.input);
   else child.stdin.end();
   let timeoutHandle: NodeJS.Timeout | undefined;
+  let timeoutKill: Promise<void> | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeoutHandle = setTimeout(() => {
-      killOwnedTree(child, 'SIGTERM');
+      timeoutKill = killOwnedTree(child, 'SIGTERM');
       reject(
         new UsageError('timeout', `Process timed out after ${options.timeoutMs}ms`, {
           retryable: true,
@@ -135,8 +143,8 @@ export async function runProcess(
     ];
     return { stdout, stderr, code: code ?? 1 };
   } catch (error) {
-    killOwnedTree(child, 'SIGKILL');
-    await exited.catch(() => undefined);
+    const forced = killOwnedTree(child, 'SIGKILL');
+    await Promise.all([exited.catch(() => undefined), timeoutKill, forced]);
     throw error;
   } finally {
     clearTimeout(timeoutHandle);
@@ -146,9 +154,7 @@ export async function runProcess(
 export function childOwned(child: ChildProcess): OwnedProcess {
   return {
     ...(child.pid === undefined ? {} : { pid: child.pid }),
-    kill: (signal) => {
-      killOwnedTree(child, signal);
-    },
+    kill: (signal) => killOwnedTree(child, signal),
     exited: once(child, 'exit'),
   };
 }

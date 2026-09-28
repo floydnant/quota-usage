@@ -70,24 +70,48 @@ export function spawnExecutable(
   });
 }
 
+/** Upper bound on one `taskkill` run so shutdown can never hang on it. */
+export const TREE_KILL_TIMEOUT_MS = 5_000;
+
 /**
  * Terminates an owned child. On Windows signals cannot reach grandchildren and a
  * `.cmd` shim leaves its real program running, so the owned tree is ended with
- * `taskkill /T` rooted at the child this program started.
+ * `taskkill /T` rooted at the child this program started. The returned promise
+ * settles once that tree kill has finished, so callers can drain it; on POSIX the
+ * signal is delivered synchronously and the promise is already resolved.
  */
-export function killOwnedTree(child: ChildProcess, signal: NodeJS.Signals = 'SIGTERM'): void {
+export function killOwnedTree(
+  child: ChildProcess,
+  signal: NodeJS.Signals = 'SIGTERM',
+): Promise<void> {
   if (!isWindows || child.pid === undefined) {
     child.kill(signal);
-    return;
+    return Promise.resolve();
   }
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  killWindowsTree(child.pid);
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+  return killWindowsTree(child.pid);
 }
 
-export function killWindowsTree(pid: number): void {
-  const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], {
-    stdio: 'ignore',
-    windowsHide: true,
+/**
+ * Runs `taskkill /T /F` for an owned process tree and settles when taskkill
+ * exits or fails to start. A taskkill that outlives `timeoutMs` is itself ended
+ * and the promise settles anyway, so a cleanup path cannot wait forever.
+ */
+export function killWindowsTree(pid: number, timeoutMs = TREE_KILL_TIMEOUT_MS): Promise<void> {
+  return new Promise((resolve) => {
+    const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    const done = (): void => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      killer.kill('SIGKILL');
+      resolve();
+    }, timeoutMs);
+    killer.once('error', done);
+    killer.once('close', done);
   });
-  killer.once('error', () => undefined);
 }

@@ -52,7 +52,8 @@ export type UpdateCommand = (
 
 /**
  * Each command gets its own owned process group, including npm's descendants.
- * Windows has no process groups, so the owned tree is ended with taskkill instead.
+ * Windows has no process groups, so the owned tree is ended with taskkill instead;
+ * the returned promise does not settle until every started tree kill has finished.
  */
 export const runUpdateCommand: UpdateCommand = (command, args, cwd, timeoutMs, signal) =>
   new Promise((resolve, reject) => {
@@ -83,9 +84,11 @@ export const runUpdateCommand: UpdateCommand = (command, args, cwd, timeoutMs, s
     let stdout = '';
     let timedOut = false;
     let escalation: NodeJS.Timeout | undefined;
+    const treeKills: Promise<void>[] = [];
     const kill = (signal: NodeJS.Signals): void => {
       if (child.pid && isWindows) {
-        if (child.exitCode === null && child.signalCode === null) killWindowsTree(child.pid);
+        if (child.exitCode === null && child.signalCode === null)
+          treeKills.push(killWindowsTree(child.pid));
       } else if (child.pid) {
         try {
           process.kill(-child.pid, signal);
@@ -112,15 +115,21 @@ export const runUpdateCommand: UpdateCommand = (command, args, cwd, timeoutMs, s
       kill('SIGKILL');
       signal?.removeEventListener('abort', terminate);
     };
-    child.once('error', () => {
+    // Settle only after the owned tree is gone: a taskkill started on timeout or
+    // cancellation can still be running when the original child has closed.
+    const settle = (finish: () => void): void => {
       cleanup();
-      reject(new UpdateError('worker'));
+      void Promise.all(treeKills).then(finish);
+    };
+    child.once('error', () => {
+      settle(() => reject(new UpdateError('worker')));
     });
     child.once('close', (code) => {
-      cleanup();
-      if (timedOut) reject(new UpdateError('timeout'));
-      else if (signal?.aborted) reject(new UpdateError('cancelled'));
-      else resolve({ code: code ?? 1, stdout: stdout.trim() });
+      settle(() => {
+        if (timedOut) reject(new UpdateError('timeout'));
+        else if (signal?.aborted) reject(new UpdateError('cancelled'));
+        else resolve({ code: code ?? 1, stdout: stdout.trim() });
+      });
     });
   });
 

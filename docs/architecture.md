@@ -114,7 +114,10 @@ macOS Trash (`~/.Trash` on Windows). External/default state is never purged.
 On Windows, POSIX modes are not enforced; the user profile's ACLs protect these
 paths and `doctor` skips mode checks. Owned children are ended with
 `taskkill /T` because Windows has no process groups and a `.cmd` shim would
-otherwise leave the real vendor program running.
+otherwise leave the real vendor program running. Each tree kill is awaited:
+process cleanup, timeouts, updater cancellation, and Codex session close do not
+finish until taskkill has exited (bounded at five seconds, after which the
+taskkill itself is ended).
 
 ## Packaging
 
