@@ -140,6 +140,36 @@ Current week (all models): 47% used · resets Oct 3, 2am (Europe/Berlin)`,
     ]);
   });
 
+  it('rejects explicit provider errors shown alongside a cost summary', () => {
+    const loadFailure = ['provider_failure', 'Claude could not load usage data', true] as const;
+    const networkFailure = ['provider_failure', 'Claude reported a network error', true] as const;
+    const cases = [
+      ['Failed to load usage data\nTotal cost: $0.0000', ...loadFailure],
+      ['usage endpoint is rate limited\nTotal cost: $0.0000', ...loadFailure],
+      ['Network error\nTotal cost: $0.0000', ...networkFailure],
+      ['Network error: unable to connect\nTotal cost: $0.0000', ...networkFailure],
+      [
+        'Update available: new version is available\nTotal cost: $0.0000',
+        'provider_failure',
+        'Claude displayed an upgrade notice',
+        false,
+      ],
+      [
+        'Please log in to Claude Code\nTotal cost: $0.0000',
+        'logged_out_account',
+        'Claude account work is logged out',
+        false,
+      ],
+    ] as const;
+    for (const [text, code, message, retryable] of cases) {
+      expect(() => parseClaudeUsageText(text, account)).toThrow(
+        expect.objectContaining({
+          data: { code, message, retryable, provider: 'claude', accountLabel: 'work' },
+        }),
+      );
+    }
+  });
+
   it('rejects provider errors, unrelated percentages, and malformed envelopes', () => {
     expect(() => parseClaudeUsageText('Please log in to Claude Code', account)).toThrow(
       'logged out',
