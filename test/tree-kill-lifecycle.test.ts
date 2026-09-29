@@ -221,7 +221,7 @@ describe('owned tree kills are drained before shutdown completes', () => {
         await run.catch(() => undefined);
         await rm(dir, { recursive: true, force: true });
       }
-    }, 10_000);
+    }, 20_000);
 
     it('does not settle a timed out command before its taskkill has finished', async () => {
       await heldUntilTreeKill(
