@@ -6,7 +6,7 @@ import { killOwnedTree, spawnExecutable } from './platform.js';
 export interface OwnedProcess {
   pid?: number | undefined;
   /** May return a promise that settles when the kill operation has finished. */
-  kill(signal?: NodeJS.Signals): unknown;
+  kill(signal?: NodeJS.Signals): boolean | Promise<unknown> | undefined;
   exited?: Promise<unknown>;
 }
 
@@ -18,7 +18,7 @@ const settled = (value: unknown): Promise<void> =>
 
 export class ProcessTracker {
   private readonly owned = new Set<OwnedProcess>();
-  private cleaning = false;
+  private cleaning: Promise<void> | undefined;
 
   track<T extends OwnedProcess>(process: T): T {
     this.owned.add(process);
@@ -37,35 +37,37 @@ export class ProcessTracker {
     return this.owned.size;
   }
 
-  async cleanup(graceMs = 500): Promise<void> {
-    if (this.cleaning) return;
-    this.cleaning = true;
-    try {
-      const processes = [...this.owned];
-      // Windows tree kills run as their own taskkill processes; drain them too.
-      const kills = processes.map((process) => settled(process.kill('SIGTERM')));
-      await Promise.all(
-        processes.map(async (process) => {
-          if (!process.exited) return;
-          await Promise.race([
-            process.exited.catch(() => undefined),
-            new Promise((resolve) => setTimeout(resolve, graceMs)),
-          ]);
-        }),
-      );
-      for (const process of processes) {
-        if (this.owned.has(process)) kills.push(settled(process.kill('SIGKILL')));
-      }
-      await Promise.all([
-        ...kills,
-        ...processes.flatMap((process) =>
-          process.exited ? [process.exited.catch(() => undefined)] : [],
-        ),
-      ]);
-      for (const process of processes) this.owned.delete(process);
-    } finally {
-      this.cleaning = false;
+  /** Concurrent callers (a signal handler and normal shutdown) share one in-flight run. */
+  cleanup(graceMs = 500): Promise<void> {
+    this.cleaning ??= this.runCleanup(graceMs).finally(() => {
+      this.cleaning = undefined;
+    });
+    return this.cleaning;
+  }
+
+  private async runCleanup(graceMs: number): Promise<void> {
+    const processes = [...this.owned];
+    // Windows tree kills run as their own taskkill processes; drain them too.
+    const kills = processes.map((process) => settled(process.kill('SIGTERM')));
+    await Promise.all(
+      processes.map(async (process) => {
+        if (!process.exited) return;
+        await Promise.race([
+          process.exited.catch(() => undefined),
+          new Promise((resolve) => setTimeout(resolve, graceMs)),
+        ]);
+      }),
+    );
+    for (const process of processes) {
+      if (this.owned.has(process)) kills.push(settled(process.kill('SIGKILL')));
     }
+    await Promise.all([
+      ...kills,
+      ...processes.flatMap((process) =>
+        process.exited ? [process.exited.catch(() => undefined)] : [],
+      ),
+    ]);
+    for (const process of processes) this.owned.delete(process);
   }
 
   installSignalHandlers(onSignal?: (signal: NodeJS.Signals) => void): () => void {

@@ -87,8 +87,9 @@ export const runUpdateCommand: UpdateCommand = (command, args, cwd, timeoutMs, s
     const treeKills: Promise<void>[] = [];
     const kill = (signal: NodeJS.Signals): void => {
       if (child.pid && isWindows) {
+        // Handle a failed kill at once: it may settle before 'close' reaches settle().
         if (child.exitCode === null && child.signalCode === null)
-          treeKills.push(killWindowsTree(child.pid));
+          treeKills.push(killWindowsTree(child.pid).catch(() => undefined));
       } else if (child.pid) {
         try {
           process.kill(-child.pid, signal);
@@ -119,7 +120,7 @@ export const runUpdateCommand: UpdateCommand = (command, args, cwd, timeoutMs, s
     // cancellation can still be running when the original child has closed.
     const settle = (finish: () => void): void => {
       cleanup();
-      void Promise.all(treeKills).then(finish);
+      void Promise.all(treeKills).then(finish, finish);
     };
     child.once('error', () => {
       settle(() => reject(new UpdateError('worker')));

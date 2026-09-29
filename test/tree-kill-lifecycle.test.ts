@@ -14,6 +14,7 @@ const gate = vi.hoisted(() => {
   let release: () => void = () => undefined;
   return {
     calls: 0,
+    fail: false,
     held: Promise.resolve(),
     hold(): void {
       this.held = new Promise<void>((resolve) => {
@@ -34,6 +35,7 @@ vi.mock('../src/platform.js', async (importOriginal) => {
       gate.calls += 1;
       await kill(...args);
       await gate.held;
+      if (gate.fail) throw new Error('tree kill failed');
     };
   return {
     ...actual,
@@ -76,6 +78,7 @@ describe('owned tree kills are drained before shutdown completes', () => {
     gate.release();
     gate.held = Promise.resolve();
     gate.calls = 0;
+    gate.fail = false;
   });
 
   it('keeps ProcessTracker.cleanup pending until the tree kill has finished', async () => {
@@ -91,6 +94,33 @@ describe('owned tree kills are drained before shutdown completes', () => {
       expect(state.settled).toBe(false);
       gate.release();
       await cleanup;
+      expect(tracker.size).toBe(0);
+    } finally {
+      gate.release();
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill('SIGKILL');
+        await once(child, 'exit');
+      }
+    }
+  });
+
+  it('keeps a concurrent ProcessTracker.cleanup pending until the tree kill has finished', async () => {
+    const child = spawn(process.execPath, IDLE, { stdio: 'ignore' });
+    try {
+      const tracker = new ProcessTracker();
+      tracker.track(childOwned(child));
+      gate.hold();
+      // A signal handler and the CLI's shutdown path can both call cleanup().
+      const first = tracker.cleanup(20);
+      const second = tracker.cleanup(20);
+      const firstState = observe(first);
+      const secondState = observe(second);
+      await afterExit(child.pid ?? 0);
+      expect(gate.calls).toBeGreaterThan(0);
+      expect(firstState.settled).toBe(false);
+      expect(secondState.settled).toBe(false);
+      gate.release();
+      await Promise.all([first, second]);
       expect(tracker.size).toBe(0);
     } finally {
       gate.release();
@@ -165,6 +195,33 @@ describe('owned tree kills are drained before shutdown completes', () => {
         'cancelled',
       );
     });
+
+    it('still settles a cancelled command when its taskkill fails', async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'usage-failed-kill-'));
+      const pidFile = join(dir, 'pid');
+      const controller = new AbortController();
+      gate.fail = true;
+      const run = runUpdateCommand(
+        process.execPath,
+        [...script, pidFile],
+        tmpdir(),
+        30_000,
+        controller.signal,
+      );
+      try {
+        await expect
+          .poll(async () => Number(await readFile(pidFile, 'utf8').catch(() => '0')), {
+            timeout: 10_000,
+          })
+          .toBeGreaterThan(0);
+        controller.abort();
+        await expect(run).rejects.toMatchObject({ failure: 'cancelled' });
+      } finally {
+        controller.abort();
+        await run.catch(() => undefined);
+        await rm(dir, { recursive: true, force: true });
+      }
+    }, 10_000);
 
     it('does not settle a timed out command before its taskkill has finished', async () => {
       await heldUntilTreeKill(

@@ -70,8 +70,8 @@ export function spawnExecutable(
   });
 }
 
-/** Upper bound on one `taskkill` run so shutdown can never hang on it. */
-export const TREE_KILL_TIMEOUT_MS = 5_000;
+/** Upper bound on one `taskkill` run so a cleanup path never waits on it forever. */
+const TREE_KILL_TIMEOUT_MS = 5_000;
 
 /**
  * Terminates an owned child. On Windows signals cannot reach grandchildren and a
@@ -95,14 +95,21 @@ export function killOwnedTree(
 /**
  * Runs `taskkill /T /F` for an owned process tree and settles when taskkill
  * exits or fails to start. A taskkill that outlives `timeoutMs` is itself ended
- * and the promise settles anyway, so a cleanup path cannot wait forever.
+ * and the promise settles anyway. It never rejects: it runs on cleanup paths.
  */
 export function killWindowsTree(pid: number, timeoutMs = TREE_KILL_TIMEOUT_MS): Promise<void> {
   return new Promise((resolve) => {
-    const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], {
-      stdio: 'ignore',
-      windowsHide: true,
-    });
+    let killer: ChildProcess;
+    try {
+      killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+    } catch {
+      // Some spawn failures throw synchronously instead of emitting 'error'.
+      resolve();
+      return;
+    }
     const done = (): void => {
       clearTimeout(timer);
       resolve();

@@ -66,6 +66,7 @@ describe('process ownership and cleanup', () => {
     tracker.track({
       kill: (signal) => {
         signals.push(String(signal));
+        return true;
       },
     });
     tracker.track({ kill: () => true, exited: Promise.reject(new Error('already failed')) });
@@ -102,9 +103,18 @@ describe('process ownership and cleanup', () => {
     });
     tracker.track({ kill: () => undefined, exited });
     const first = tracker.cleanup(20);
-    await expect(tracker.cleanup(20)).resolves.toBeUndefined();
+    const second = tracker.cleanup(20);
+    // A concurrent caller shares the in-flight cleanup instead of returning early.
+    expect(second).toBe(first);
+    let secondSettled = false;
+    void second.then(() => (secondSettled = true));
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(secondSettled).toBe(false);
     resolveExit?.();
+    await expect(second).resolves.toBeUndefined();
     await first;
+    // Once finished, a later cleanup starts a fresh run.
+    expect(tracker.cleanup(20)).not.toBe(first);
 
     const signaled = await runProcess(
       process.execPath,
