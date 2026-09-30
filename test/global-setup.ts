@@ -14,7 +14,7 @@ export default function setup(): () => void {
 
   return () => {
     for (const [name, value] of previous) {
-      if (value === undefined) delete process.env[name];
+      if (value === undefined) Reflect.deleteProperty(process.env, name);
       else process.env[name] = value;
     }
     try {
