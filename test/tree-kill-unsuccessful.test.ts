@@ -101,9 +101,16 @@ describe('an unsuccessful tree kill never leaves shutdown waiting', () => {
     expect(await elapsed).toBeLessThan(300 + SETTLE_BOUND_MS);
   });
 
-  it.each(['ignore', 'error'] as const)(
-    'settles a cancelled update command when the direct kill fails with %s',
-    async (directKill) => {
+  it.each([
+    { directKill: 'ignore' as const, bound: SETTLE_BOUND_MS },
+    // The 'error' path settles via the child.on('error') handler right after
+    // the first grace, not via boundExit's second grace, so it must stay inside
+    // ~300 ms escalation + one KILL_EXIT_GRACE_MS; regressing into the slower
+    // give-up path makes this bound trip.
+    { directKill: 'error' as const, bound: 300 + KILL_EXIT_GRACE_MS + 1_000 },
+  ])(
+    'settles a cancelled update command when the direct kill is $directKill',
+    async ({ directKill, bound }) => {
       platform.directKill = directKill;
       const controller = new AbortController();
       const run = runUpdateCommand(process.execPath, IDLE, tmpdir(), 30_000, controller.signal);
@@ -113,7 +120,7 @@ describe('an unsuccessful tree kill never leaves shutdown waiting', () => {
       controller.abort();
       const elapsed = timed(run);
       await expect(run).rejects.toMatchObject({ failure: 'cancelled' });
-      expect(await elapsed).toBeLessThan(SETTLE_BOUND_MS);
+      expect(await elapsed).toBeLessThan(bound);
       // The command gave up on the child; teardown ends it.
       expect(isAlive(child.pid as number)).toBe(true);
       // Give-up releases the child's pipe and handle so neither keeps the CLI
@@ -123,6 +130,13 @@ describe('an unsuccessful tree kill never leaves shutdown waiting', () => {
       expect(platform.unrefed.has(child.pid as number)).toBe(true);
     },
   );
+
+  it('classifies a spawn ENOENT as worker even when the signal aborts in the same tick', async () => {
+    const controller = new AbortController();
+    const run = runUpdateCommand('does-not-exist', [], tmpdir(), 1_000, controller.signal);
+    controller.abort();
+    await expect(run).rejects.toMatchObject({ failure: 'worker' });
+  });
 
   it('does not start a third tree kill after boundExit gives up', async () => {
     platform.directKill = 'ignore';

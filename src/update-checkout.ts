@@ -93,6 +93,7 @@ export const runUpdateCommand: UpdateCommand = (command, args, cwd, timeoutMs, s
     let timedOut = false;
     let settled = false;
     let abandoned = false;
+    let killedByUs = false;
     let escalation: NodeJS.Timeout | undefined;
     const treeKills: Promise<void>[] = [];
     const closed = new Promise<void>((resolveClose) => {
@@ -104,9 +105,12 @@ export const runUpdateCommand: UpdateCommand = (command, args, cwd, timeoutMs, s
       if (abandoned) return;
       if (child.pid && isWindows) {
         // Handle a failed kill at once: it may settle before 'close' reaches settle().
-        if (child.exitCode === null && child.signalCode === null)
+        if (child.exitCode === null && child.signalCode === null) {
+          killedByUs = true;
           treeKills.push(killWindowsTree(child.pid).catch(() => undefined));
+        }
       } else if (child.pid) {
+        killedByUs = true;
         try {
           process.kill(-child.pid, signal);
         } catch {
@@ -122,6 +126,7 @@ export const runUpdateCommand: UpdateCommand = (command, args, cwd, timeoutMs, s
       await Promise.all(treeKills);
       if (await settlesWithin(closed, KILL_EXIT_GRACE_MS)) return;
       try {
+        killedByUs = true;
         child.kill('SIGKILL');
       } catch {
         /* Defensive: child.kill is documented not to throw, only to return false
@@ -171,9 +176,10 @@ export const runUpdateCommand: UpdateCommand = (command, args, cwd, timeoutMs, s
       void Promise.all(treeKills).then(done, done);
     };
     child.once('error', () => {
-      // After cancellation or timeout, a kill that cannot be delivered must not
-      // turn the result into a worker failure.
-      if (timedOut || signal?.aborted) settle(finish(null));
+      // Only an error that followed one of our own kill attempts can safely be
+      // reclassified as cancelled/timeout; a genuine spawn failure (ENOENT /
+      // EACCES) that races with abort or timeout must stay a worker failure.
+      if (killedByUs && (timedOut || signal?.aborted)) settle(finish(null));
       else settle(() => reject(new UpdateError('worker')));
     });
     child.once('close', (code) => {
