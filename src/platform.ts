@@ -101,8 +101,8 @@ export function settlesWithin(promise: Promise<unknown>, ms: number): Promise<bo
 export function exitsWithin(child: ChildProcess, ms: number): Promise<boolean> {
   if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true);
   return new Promise((resolve) => {
-    // `finish` references `timer` and `onExit` before their declaration lines,
-    // so `function` hoisting keeps the Temporal Dead Zone out of the exit path.
+    // `finish` only runs from the timer or the exit listener, both registered
+    // below, so `timer` and `onExit` are always initialised by then.
     function finish(exited: boolean): void {
       clearTimeout(timer);
       child.off('exit', onExit);
@@ -175,7 +175,9 @@ export function killTreeThenDirect(
   return treeKill(pid)
     .then(() => exitsWithin(child, KILL_EXIT_GRACE_MS))
     .then((exited) => {
-      if (exited) return;
+      // Re-check right before signalling by pid: once Node has reaped the child
+      // its pid may be reused, and process.kill has no handle to guard it.
+      if (exited || child.exitCode !== null || child.signalCode !== null) return;
       try {
         process.kill(pid, signal);
       } catch {
