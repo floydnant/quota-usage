@@ -137,6 +137,11 @@ export function releaseChild(child: ChildProcess): void {
  * the child itself is killed directly. The returned promise settles once that has
  * finished, so callers can drain it; on POSIX the signal is delivered
  * synchronously and the promise is already resolved. It never rejects.
+ *
+ * Limit: the direct-kill fallback reaches only the root child this program
+ * started, so a surviving `.cmd` shim's cmd.exe host is ended but the vendor
+ * program it spawned can outlive it. The fallback only runs when taskkill
+ * itself has failed; the normal `taskkill /T` path still ends the whole tree.
  */
 export function killOwnedTree(
   child: ChildProcess,

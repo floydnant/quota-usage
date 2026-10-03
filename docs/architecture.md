@@ -128,6 +128,12 @@ case for an updater command that ignores every signal is therefore the 300 ms
 `SIGTERM`-to-`SIGKILL` escalation, two bounded `taskkill` runs that overlap
 within about five seconds, and two `KILL_EXIT_GRACE_MS` exit waits.
 
+The direct-kill fallback that runs after taskkill fails reaches only the root
+child this program started. A `.cmd` shim is spawned as cmd.exe hosting the
+real vendor program, so the fallback ends cmd.exe but the vendor program it
+spawned can outlive it. The normal `taskkill /T` path still ends the whole
+tree; the fallback is a bound on waiting, not a replacement.
+
 ## Packaging
 
 TypeScript compiles to `dist/` with JavaScript, declarations, and source maps.
