@@ -1,10 +1,15 @@
 import type { ChildProcess } from 'node:child_process';
 import { spawn } from 'node:child_process';
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { KILL_EXIT_GRACE_MS } from '../src/platform.js';
 import { childOwned, ProcessTracker, runProcess } from '../src/processes.js';
+import { CodexAdapter, identityHash } from '../src/providers/codex.js';
 import { runUpdateCommand } from '../src/update-checkout.js';
+import type { AccountConfig } from '../src/types.js';
+import { writeFakeExecutable } from './fake-executable.js';
 import { isAlive } from './process-tree.js';
 
 // The Windows tree kill is replaced by one that does nothing (or fails), so a
@@ -75,9 +80,15 @@ describe('an unsuccessful tree kill never leaves shutdown waiting', () => {
     }
   });
 
-  it.each(['noop', 'fail'] as const)(
-    'settles a cancelled update command when the tree kill is a %s, by killing the child directly',
-    async (treeKill) => {
+  it.each([
+    { treeKill: 'noop' as const, title: 'does nothing' },
+    // `killWindowsTree` is documented never to reject; this variant feeds it a
+    // throwing fake so the defensive `.catch(() => undefined)` chain inside
+    // `killOwnedTree` is exercised.
+    { treeKill: 'fail' as const, title: 'violates its never-rejects contract' },
+  ])(
+    'settles a cancelled update command when the tree kill $title, by killing the child directly',
+    async ({ treeKill }) => {
       platform.treeKill = treeKill;
       const controller = new AbortController();
       const run = runUpdateCommand(process.execPath, IDLE, tmpdir(), 30_000, controller.signal);
@@ -94,12 +105,24 @@ describe('an unsuccessful tree kill never leaves shutdown waiting', () => {
     },
   );
 
-  it('settles a timed out update command when the tree kill is a no-op', async () => {
-    const run = runUpdateCommand(process.execPath, IDLE, tmpdir(), 300);
-    const elapsed = timed(run);
-    await expect(run).rejects.toMatchObject({ failure: 'timeout' });
-    expect(await elapsed).toBeLessThan(300 + SETTLE_BOUND_MS);
-  });
+  it.each([
+    { directKill: 'real' as const, aliveAfter: false, bound: 300 + SETTLE_BOUND_MS },
+    { directKill: 'ignore' as const, aliveAfter: true, bound: 300 + SETTLE_BOUND_MS },
+    { directKill: 'error' as const, aliveAfter: true, bound: 300 + KILL_EXIT_GRACE_MS + 1_000 },
+  ])(
+    'settles a timed out update command when the direct kill is $directKill',
+    async ({ directKill, aliveAfter, bound }) => {
+      platform.directKill = directKill;
+      const run = runUpdateCommand(process.execPath, IDLE, tmpdir(), 300);
+      await expect.poll(() => platform.children[0]?.pid).toBeDefined();
+      const child = platform.children[0] as ChildProcess;
+      expect(child.pid).toBeDefined();
+      const elapsed = timed(run);
+      await expect(run).rejects.toMatchObject({ failure: 'timeout' });
+      expect(await elapsed).toBeLessThan(bound);
+      expect(isAlive(child.pid as number)).toBe(aliveAfter);
+    },
+  );
 
   it.each([
     { directKill: 'ignore' as const, bound: SETTLE_BOUND_MS },
@@ -177,5 +200,35 @@ describe('an unsuccessful tree kill never leaves shutdown waiting', () => {
     expect(child.stdout?.destroyed).toBe(true);
     expect(child.stderr?.destroyed).toBe(true);
     expect(platform.unrefed.has(child.pid as number)).toBe(true);
+  });
+
+  it('rejects a Codex collect when the app-server ignores SIGTERM and never answers', async () => {
+    // A fake codex that answers --version but, in app-server mode, ignores
+    // SIGTERM, never reads stdin, and never writes a response.
+    const dir = await mkdtemp(join(tmpdir(), 'fake-codex-close-'));
+    const path = join(dir, 'codex');
+    const script = `#!/usr/bin/env node
+if (process.argv.includes('--version')) { console.log('codex-cli 0.150.1'); process.exit(0); }
+process.on('SIGTERM', () => {});
+setInterval(() => {}, 1_000);`;
+    const executable = await writeFakeExecutable(path, script);
+    const tracker = new ProcessTracker();
+    const adapter = new CodexAdapter(executable, tracker);
+    const account: AccountConfig = {
+      provider: 'codex',
+      label: 'personal',
+      stateDir: tmpdir(),
+      ownership: 'external',
+      identityHash: identityHash('user@example.com'),
+    };
+    const started = Date.now();
+    await expect(adapter.collect(account, { timeoutMs: 100 })).rejects.toMatchObject({
+      data: { code: 'timeout' },
+    });
+    // Session timeout + the 300 ms and 200 ms close graces + one final
+    // KILL_EXIT_GRACE_MS + scheduling headroom. A regression that drops the
+    // bounded wait on the exit promise makes this bound trip.
+    const bound = 100 + 300 + 200 + KILL_EXIT_GRACE_MS + 2_000;
+    expect(Date.now() - started).toBeLessThan(bound);
   });
 });

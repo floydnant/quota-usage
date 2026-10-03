@@ -278,15 +278,12 @@ class JsonRpcSession {
 
   async close(): Promise<void> {
     this.child.stdin.end();
-    await Promise.race([
-      this.exited.catch(() => undefined),
-      new Promise((r) => setTimeout(r, 300)),
-    ]);
+    // Each grace is drained through `settlesWithin`, whose timer is both
+    // cleared and unref'd; a raw `setTimeout` here would stay referenced after
+    // the race resolves and could outlive the next `process.exitCode`.
+    await settlesWithin(this.exited, 300);
     if (this.child.exitCode === null) this.kill('SIGTERM');
-    await Promise.race([
-      this.exited.catch(() => undefined),
-      new Promise((r) => setTimeout(r, 200)),
-    ]);
+    await settlesWithin(this.exited, 200);
     if (this.child.exitCode === null) this.kill('SIGKILL');
     await Promise.all(this.kills);
     // A child that still has not exited is given up on: its stdio pipes and
