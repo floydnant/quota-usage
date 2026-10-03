@@ -162,11 +162,13 @@ export const runUpdateCommand: UpdateCommand = (command, args, cwd, timeoutMs, s
       kill('SIGKILL');
       signal?.removeEventListener('abort', terminate);
     };
-    const finish = (code: number | null) => (): void => {
-      if (timedOut) reject(new UpdateError('timeout'));
-      else if (signal?.aborted) reject(new UpdateError('cancelled'));
-      else resolve({ code: code ?? 1, stdout: stdout.trim() });
-    };
+    const finish =
+      (code: number | null): (() => void) =>
+      (): void => {
+        if (timedOut) reject(new UpdateError('timeout'));
+        else if (signal?.aborted) reject(new UpdateError('cancelled'));
+        else resolve({ code: code ?? 1, stdout: stdout.trim() });
+      };
     // Settle only after the owned tree is gone: a taskkill started on timeout or
     // cancellation can still be running when the original child has closed.
     const settle = (done: () => void): void => {
