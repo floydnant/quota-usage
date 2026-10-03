@@ -12,7 +12,7 @@ import { isAlive } from './process-tree.js';
 // cleanup must still settle within a bound instead of waiting on that child.
 const platform = vi.hoisted(() => ({
   treeKill: 'noop',
-  ignoreDirectKill: false,
+  directKill: 'real',
   children: [] as ChildProcess[],
 }));
 
@@ -28,8 +28,13 @@ vi.mock('../src/platform.js', async (importOriginal) => {
     spawnExecutable: (...args: Parameters<typeof actual.spawnExecutable>): ChildProcess => {
       const child = actual.spawnExecutable(...args);
       platform.children.push(child);
-      // Simulates a child that also survives the direct kill.
-      if (platform.ignoreDirectKill) child.kill = () => false;
+      // Simulates a child that also survives the direct kill, silently or with
+      // the 'error' event Node emits when a signal cannot be delivered.
+      if (platform.directKill !== 'real')
+        child.kill = () => {
+          if (platform.directKill === 'error') child.emit('error', new Error('kill EPERM'));
+          return false;
+        };
       return child;
     },
   };
@@ -50,7 +55,7 @@ describe('an unsuccessful tree kill never leaves shutdown waiting', () => {
 
   afterEach(async () => {
     platform.treeKill = 'noop';
-    platform.ignoreDirectKill = false;
+    platform.directKill = 'real';
     for (const child of [...platform.children.splice(0), ...spawned.splice(0)]) {
       const pid = child.pid;
       if (pid === undefined || !isAlive(pid)) continue;
@@ -82,19 +87,22 @@ describe('an unsuccessful tree kill never leaves shutdown waiting', () => {
     expect(await elapsed).toBeLessThan(300 + SETTLE_BOUND_MS);
   });
 
-  it('settles a cancelled update command even when the child survives every kill', async () => {
-    platform.ignoreDirectKill = true;
-    const controller = new AbortController();
-    const run = runUpdateCommand(process.execPath, IDLE, tmpdir(), 30_000, controller.signal);
-    await expect.poll(() => platform.children[0]?.pid).toBeDefined();
-    const child = platform.children[0] as ChildProcess;
-    controller.abort();
-    const elapsed = timed(run);
-    await expect(run).rejects.toMatchObject({ failure: 'cancelled' });
-    expect(await elapsed).toBeLessThan(SETTLE_BOUND_MS);
-    // The command gave up on the child; teardown ends it.
-    expect(isAlive(child.pid ?? 0)).toBe(true);
-  });
+  it.each(['ignore', 'error'] as const)(
+    'settles a cancelled update command when the direct kill fails with %s',
+    async (directKill) => {
+      platform.directKill = directKill;
+      const controller = new AbortController();
+      const run = runUpdateCommand(process.execPath, IDLE, tmpdir(), 30_000, controller.signal);
+      await expect.poll(() => platform.children[0]?.pid).toBeDefined();
+      const child = platform.children[0] as ChildProcess;
+      controller.abort();
+      const elapsed = timed(run);
+      await expect(run).rejects.toMatchObject({ failure: 'cancelled' });
+      expect(await elapsed).toBeLessThan(SETTLE_BOUND_MS);
+      // The command gave up on the child; teardown ends it.
+      expect(isAlive(child.pid ?? 0)).toBe(true);
+    },
+  );
 
   it('returns from ProcessTracker.cleanup when the tracked child does not exit', async () => {
     const child = spawn(process.execPath, IDLE, { stdio: 'ignore' });

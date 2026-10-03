@@ -163,7 +163,10 @@ export const runUpdateCommand: UpdateCommand = (command, args, cwd, timeoutMs, s
       void Promise.all(treeKills).then(done, done);
     };
     child.once('error', () => {
-      settle(() => reject(new UpdateError('worker')));
+      // After cancellation or timeout, a kill that cannot be delivered must not
+      // turn the result into a worker failure.
+      if (timedOut || signal?.aborted) settle(finish(null));
+      else settle(() => reject(new UpdateError('worker')));
     });
     child.once('close', (code) => {
       settle(finish(code));
