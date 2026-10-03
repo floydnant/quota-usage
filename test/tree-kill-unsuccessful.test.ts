@@ -15,6 +15,7 @@ const platform = vi.hoisted(() => ({
   directKill: 'real',
   children: [] as ChildProcess[],
   unrefed: new Set<number>(),
+  treeKillCalls: 0,
 }));
 
 vi.mock('../src/platform.js', async (importOriginal) => {
@@ -24,6 +25,7 @@ vi.mock('../src/platform.js', async (importOriginal) => {
     isWindows: true,
     killOwnedTree: vi.fn(async (): Promise<void> => undefined),
     killWindowsTree: vi.fn(async (): Promise<void> => {
+      platform.treeKillCalls += 1;
       if (platform.treeKill === 'fail') throw new Error('taskkill failed');
     }),
     spawnExecutable: (...args: Parameters<typeof actual.spawnExecutable>): ChildProcess => {
@@ -64,6 +66,7 @@ describe('an unsuccessful tree kill never leaves shutdown waiting', () => {
     platform.treeKill = 'noop';
     platform.directKill = 'real';
     platform.unrefed.clear();
+    platform.treeKillCalls = 0;
     for (const child of [...platform.children.splice(0), ...spawned.splice(0)]) {
       const pid = child.pid;
       if (pid === undefined || !isAlive(pid)) continue;
@@ -120,6 +123,18 @@ describe('an unsuccessful tree kill never leaves shutdown waiting', () => {
       expect(platform.unrefed.has(child.pid as number)).toBe(true);
     },
   );
+
+  it('does not start a third tree kill after boundExit gives up', async () => {
+    platform.directKill = 'ignore';
+    const controller = new AbortController();
+    const run = runUpdateCommand(process.execPath, IDLE, tmpdir(), 30_000, controller.signal);
+    await expect.poll(() => platform.children[0]?.pid).toBeDefined();
+    controller.abort();
+    await expect(run).rejects.toMatchObject({ failure: 'cancelled' });
+    // SIGTERM and SIGKILL tree kills ran from terminate() and its escalation;
+    // boundExit's final give-up must not start a third one via cleanup().
+    expect(platform.treeKillCalls).toBe(2);
+  });
 
   it('returns from ProcessTracker.cleanup when the tracked child does not exit', async () => {
     const child = spawn(process.execPath, IDLE, { stdio: 'ignore' });

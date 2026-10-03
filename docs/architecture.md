@@ -121,7 +121,12 @@ after which the taskkill itself is ended. A tree kill that fails or times out
 never leaves those paths waiting: a child that has not exited within a short
 grace period is killed directly, and one that still does not exit is given up
 on after another grace period, so cancellation, timeout, and cleanup always
-settle.
+settle. On give-up the surviving child's stdio pipes are destroyed and the
+child is unref'd so neither keeps the CLI event loop alive, and no additional
+taskkill is started for a child that has already been abandoned. The worst
+case for an updater command that ignores every signal is therefore the 300 ms
+`SIGTERM`-to-`SIGKILL` escalation, two bounded `taskkill` runs that overlap
+within about five seconds, and two `KILL_EXIT_GRACE_MS` exit waits.
 
 ## Packaging
 

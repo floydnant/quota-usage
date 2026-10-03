@@ -92,12 +92,16 @@ export const runUpdateCommand: UpdateCommand = (command, args, cwd, timeoutMs, s
     let stdout = '';
     let timedOut = false;
     let settled = false;
+    let abandoned = false;
     let escalation: NodeJS.Timeout | undefined;
     const treeKills: Promise<void>[] = [];
     const closed = new Promise<void>((resolveClose) => {
       child.once('close', () => resolveClose());
     });
     const kill = (signal: NodeJS.Signals): void => {
+      // Once boundExit has given up, do not start another tree kill: the child
+      // ignored two of them already and a third only adds up to 5 s of waiting.
+      if (abandoned) return;
       if (child.pid && isWindows) {
         // Handle a failed kill at once: it may settle before 'close' reaches settle().
         if (child.exitCode === null && child.signalCode === null)
@@ -120,11 +124,15 @@ export const runUpdateCommand: UpdateCommand = (command, args, cwd, timeoutMs, s
       try {
         child.kill('SIGKILL');
       } catch {
-        /* Child already exited. */
+        /* Defensive: child.kill is documented not to throw, only to return false
+           when the signal cannot be delivered, but any thrown error must not
+           leave this give-up path pending. */
       }
       if (await settlesWithin(closed, KILL_EXIT_GRACE_MS)) return;
-      // Stop waiting for a child that ignores every kill, and release its stdio
-      // pipe and handle so neither keeps the CLI event loop alive.
+      // Stop waiting for a child that ignores every kill: release its stdio pipe
+      // and handle so neither keeps the CLI event loop alive, and mark it
+      // abandoned so settle()'s cleanup does not start another bounded taskkill.
+      abandoned = true;
       releaseChild(child);
       settle(finish(null));
     };
