@@ -241,5 +241,14 @@ setInterval(() => {}, 1_000);`;
     // bounded wait on the exit promise makes this bound trip.
     const bound = 100 + 300 + 200 + KILL_EXIT_GRACE_MS + 2_000;
     expect(Date.now() - started).toBeLessThan(bound);
+    // The app-server is the last child spawned (after `--version`). On a normal
+    // exit no tracker cleanup runs, so close() alone must release its pipes and
+    // handle or the CLI stays open.
+    const child = platform.children.at(-1);
+    expect(child?.pid).toBeDefined();
+    expect(child?.stdin?.destroyed).toBe(true);
+    expect(child?.stdout?.destroyed).toBe(true);
+    expect(child?.stderr?.destroyed).toBe(true);
+    expect(platform.unrefed.has(child?.pid as number)).toBe(true);
   });
 });
