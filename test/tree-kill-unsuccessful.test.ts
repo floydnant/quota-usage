@@ -1,5 +1,5 @@
 import type { ChildProcess } from 'node:child_process';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,6 +11,17 @@ import { runUpdateCommand } from '../src/update-checkout.js';
 import type { AccountConfig } from '../src/types.js';
 import { writeFakeExecutable } from './fake-executable.js';
 import { isAlive } from './process-tree.js';
+
+// A `.cmd` fake has a cmd.exe parent and a real Node grandchild; a plain
+// SIGKILL to the recorded pid stops cmd.exe but leaves the grandchild running.
+// On Windows every teardown kill therefore goes through `taskkill /T /F`.
+function hardKill(pid: number): void {
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
+  } else {
+    process.kill(pid, 'SIGKILL');
+  }
+}
 
 // The Windows tree kill is replaced by one that does nothing (or fails), so a
 // real idle child outlives it on every platform. Cancellation, timeout, and
@@ -75,7 +86,7 @@ describe('an unsuccessful tree kill never leaves shutdown waiting', () => {
     for (const child of [...platform.children.splice(0), ...spawned.splice(0)]) {
       const pid = child.pid;
       if (pid === undefined || !isAlive(pid)) continue;
-      process.kill(pid, 'SIGKILL');
+      hardKill(pid);
       await expect.poll(() => isAlive(pid), { timeout: 5_000 }).toBe(false);
     }
   });
