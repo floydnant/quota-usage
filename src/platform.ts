@@ -74,11 +74,52 @@ export function spawnExecutable(
 const TREE_KILL_TIMEOUT_MS = 5_000;
 
 /**
+ * How long a killed child gets to exit before the next step: a direct kill after
+ * an unsuccessful tree kill, or giving up on a child that still does not exit.
+ */
+export const KILL_EXIT_GRACE_MS = 2_000;
+
+/**
+ * Resolves `true` once `promise` settles, or `false` after `ms`. It never
+ * rejects, and its timer is cleared and unref'd so it never holds the process open.
+ */
+export function settlesWithin(promise: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined;
+  const expired = new Promise<boolean>((resolve) => {
+    timer = setTimeout(resolve, ms, false);
+    timer.unref();
+  });
+  const done = promise.then(
+    () => true,
+    () => true,
+  );
+  return Promise.race([done, expired]).finally(() => clearTimeout(timer));
+}
+
+/** Resolves `true` once `child` has exited, or `false` after `ms`. */
+export function exitsWithin(child: ChildProcess, ms: number): Promise<boolean> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const finish = (exited: boolean): void => {
+      clearTimeout(timer);
+      child.off('exit', onExit);
+      resolve(exited);
+    };
+    const onExit = (): void => finish(true);
+    const timer = setTimeout(finish, ms, false);
+    timer.unref();
+    child.once('exit', onExit);
+  });
+}
+
+/**
  * Terminates an owned child. On Windows signals cannot reach grandchildren and a
  * `.cmd` shim leaves its real program running, so the owned tree is ended with
- * `taskkill /T` rooted at the child this program started. The returned promise
- * settles once that tree kill has finished, so callers can drain it; on POSIX the
- * signal is delivered synchronously and the promise is already resolved.
+ * `taskkill /T` rooted at the child this program started. If taskkill fails,
+ * errors, or times out and the child has not exited within `KILL_EXIT_GRACE_MS`,
+ * the child itself is killed directly. The returned promise settles once that has
+ * finished, so callers can drain it; on POSIX the signal is delivered
+ * synchronously and the promise is already resolved. It never rejects.
  */
 export function killOwnedTree(
   child: ChildProcess,
@@ -89,7 +130,12 @@ export function killOwnedTree(
     return Promise.resolve();
   }
   if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
-  return killWindowsTree(child.pid);
+  return killWindowsTree(child.pid)
+    .then(() => exitsWithin(child, KILL_EXIT_GRACE_MS))
+    .then((exited) => {
+      if (!exited) child.kill(signal);
+    })
+    .catch(() => undefined);
 }
 
 /**

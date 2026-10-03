@@ -4,7 +4,7 @@ import { once } from 'node:events';
 import { createInterface } from 'node:readline';
 import { UsageError } from '../errors.js';
 import { parseVersion, compareVersions, vendorEnvironment } from '../executable.js';
-import { killOwnedTree, spawnExecutable } from '../platform.js';
+import { KILL_EXIT_GRACE_MS, killOwnedTree, settlesWithin, spawnExecutable } from '../platform.js';
 import { childOwned, ProcessTracker, runProcess } from '../processes.js';
 import type {
   AccountConfig,
@@ -282,7 +282,8 @@ class JsonRpcSession {
       new Promise((r) => setTimeout(r, 200)),
     ]);
     if (this.child.exitCode === null) this.kill('SIGKILL');
-    await Promise.all([this.exited.catch(() => undefined), ...this.kills]);
+    await Promise.all(this.kills);
+    await settlesWithin(this.exited, KILL_EXIT_GRACE_MS);
   }
 }
 

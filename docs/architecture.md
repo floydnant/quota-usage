@@ -117,7 +117,11 @@ paths and `doctor` skips mode checks. Owned children are ended with
 otherwise leave the real vendor program running. Each tree kill is awaited:
 process cleanup, timeouts, updater cancellation, and Codex session close do not
 finish until taskkill has exited. Each taskkill run is bounded at five seconds,
-after which the taskkill itself is ended.
+after which the taskkill itself is ended. A tree kill that fails or times out
+never leaves those paths waiting: a child that has not exited within a short
+grace period is killed directly, and one that still does not exit is given up
+on after another grace period, so cancellation, timeout, and cleanup always
+settle.
 
 ## Packaging
 

@@ -1,7 +1,7 @@
 import type { ChildProcess, ChildProcessWithoutNullStreams } from 'node:child_process';
 import { once } from 'node:events';
 import { UsageError } from './errors.js';
-import { killOwnedTree, spawnExecutable } from './platform.js';
+import { KILL_EXIT_GRACE_MS, killOwnedTree, settlesWithin, spawnExecutable } from './platform.js';
 
 export interface OwnedProcess {
   pid?: number | undefined;
@@ -61,12 +61,17 @@ export class ProcessTracker {
     for (const process of processes) {
       if (this.owned.has(process)) kills.push(settled(process.kill('SIGKILL')));
     }
-    await Promise.all([
-      ...kills,
-      ...processes.flatMap((process) =>
-        process.exited ? [process.exited.catch(() => undefined)] : [],
+    // Tree kills are bounded by the platform layer. A child that still does not
+    // exit after the forced kill gets one more grace period, then is given up on.
+    await Promise.all(kills);
+    await settlesWithin(
+      Promise.all(
+        processes.flatMap((process) =>
+          process.exited ? [process.exited.catch(() => undefined)] : [],
+        ),
       ),
-    ]);
+      KILL_EXIT_GRACE_MS,
+    );
     for (const process of processes) this.owned.delete(process);
   }
 
@@ -146,7 +151,8 @@ export async function runProcess(
     return { stdout, stderr, code: code ?? 1 };
   } catch (error) {
     const forced = killOwnedTree(child, 'SIGKILL');
-    await Promise.all([exited.catch(() => undefined), timeoutKill, forced]);
+    await Promise.all([timeoutKill, forced]);
+    await settlesWithin(exited, KILL_EXIT_GRACE_MS);
     throw error;
   } finally {
     clearTimeout(timeoutHandle);

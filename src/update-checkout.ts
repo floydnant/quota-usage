@@ -13,7 +13,14 @@ import {
 } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { UsageError } from './errors.js';
-import { findCommand, isWindows, killWindowsTree, spawnExecutable } from './platform.js';
+import {
+  findCommand,
+  isWindows,
+  KILL_EXIT_GRACE_MS,
+  killWindowsTree,
+  settlesWithin,
+  spawnExecutable,
+} from './platform.js';
 
 export const UPDATE_FAILURES = {
   dirty: 'working tree is dirty; commit or stash changes before updating',
@@ -83,8 +90,12 @@ export const runUpdateCommand: UpdateCommand = (command, args, cwd, timeoutMs, s
     });
     let stdout = '';
     let timedOut = false;
+    let settled = false;
     let escalation: NodeJS.Timeout | undefined;
     const treeKills: Promise<void>[] = [];
+    const closed = new Promise<void>((resolveClose) => {
+      child.once('close', () => resolveClose());
+    });
     const kill = (signal: NodeJS.Signals): void => {
       if (child.pid && isWindows) {
         // Handle a failed kill at once: it may settle before 'close' reaches settle().
@@ -98,9 +109,31 @@ export const runUpdateCommand: UpdateCommand = (command, args, cwd, timeoutMs, s
         }
       }
     };
+    // A tree kill can fail to start, error, or time out, and a child can survive
+    // its group kill. Once the tree kills have settled, give the child a bounded
+    // grace to close, then kill it directly; if it still does not close, settle
+    // anyway instead of leaving cancellation or timeout pending forever.
+    const boundExit = async (): Promise<void> => {
+      await Promise.all(treeKills);
+      if (await settlesWithin(closed, KILL_EXIT_GRACE_MS)) return;
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        /* Child already exited. */
+      }
+      if (await settlesWithin(closed, KILL_EXIT_GRACE_MS)) return;
+      // Stop waiting for a child that ignores every kill, and do not let its pipe
+      // or handle keep the CLI open.
+      child.stdout?.destroy();
+      child.unref();
+      settle(finish(null));
+    };
     const terminate = (): void => {
       kill('SIGTERM');
-      escalation ??= setTimeout(() => kill('SIGKILL'), 300);
+      escalation ??= setTimeout(() => {
+        kill('SIGKILL');
+        void boundExit();
+      }, 300);
     };
     const timer = setTimeout(() => {
       timedOut = true;
@@ -116,21 +149,24 @@ export const runUpdateCommand: UpdateCommand = (command, args, cwd, timeoutMs, s
       kill('SIGKILL');
       signal?.removeEventListener('abort', terminate);
     };
+    const finish = (code: number | null) => (): void => {
+      if (timedOut) reject(new UpdateError('timeout'));
+      else if (signal?.aborted) reject(new UpdateError('cancelled'));
+      else resolve({ code: code ?? 1, stdout: stdout.trim() });
+    };
     // Settle only after the owned tree is gone: a taskkill started on timeout or
     // cancellation can still be running when the original child has closed.
-    const settle = (finish: () => void): void => {
+    const settle = (done: () => void): void => {
+      if (settled) return;
+      settled = true;
       cleanup();
-      void Promise.all(treeKills).then(finish, finish);
+      void Promise.all(treeKills).then(done, done);
     };
     child.once('error', () => {
       settle(() => reject(new UpdateError('worker')));
     });
     child.once('close', (code) => {
-      settle(() => {
-        if (timedOut) reject(new UpdateError('timeout'));
-        else if (signal?.aborted) reject(new UpdateError('cancelled'));
-        else resolve({ code: code ?? 1, stdout: stdout.trim() });
-      });
+      settle(finish(code));
     });
   });
 
