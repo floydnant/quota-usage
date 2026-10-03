@@ -14,6 +14,7 @@ const platform = vi.hoisted(() => ({
   treeKill: 'noop',
   directKill: 'real',
   children: [] as ChildProcess[],
+  unrefed: new Set<number>(),
 }));
 
 vi.mock('../src/platform.js', async (importOriginal) => {
@@ -28,6 +29,12 @@ vi.mock('../src/platform.js', async (importOriginal) => {
     spawnExecutable: (...args: Parameters<typeof actual.spawnExecutable>): ChildProcess => {
       const child = actual.spawnExecutable(...args);
       platform.children.push(child);
+      // Records whether give-up paths actually unref the child they abandon.
+      const unref = child.unref.bind(child);
+      child.unref = (): void => {
+        if (child.pid !== undefined) platform.unrefed.add(child.pid);
+        unref();
+      };
       // Simulates a child that also survives the direct kill, silently or with
       // the 'error' event Node emits when a signal cannot be delivered.
       if (platform.directKill !== 'real')
@@ -56,6 +63,7 @@ describe('an unsuccessful tree kill never leaves shutdown waiting', () => {
   afterEach(async () => {
     platform.treeKill = 'noop';
     platform.directKill = 'real';
+    platform.unrefed.clear();
     for (const child of [...platform.children.splice(0), ...spawned.splice(0)]) {
       const pid = child.pid;
       if (pid === undefined || !isAlive(pid)) continue;
@@ -72,11 +80,14 @@ describe('an unsuccessful tree kill never leaves shutdown waiting', () => {
       const run = runUpdateCommand(process.execPath, IDLE, tmpdir(), 30_000, controller.signal);
       await expect.poll(() => platform.children[0]?.pid).toBeDefined();
       const child = platform.children[0] as ChildProcess;
+      expect(child.pid).toBeDefined();
       controller.abort();
       const elapsed = timed(run);
       await expect(run).rejects.toMatchObject({ failure: 'cancelled' });
       expect(await elapsed).toBeLessThan(SETTLE_BOUND_MS);
-      expect(isAlive(child.pid ?? 0)).toBe(false);
+      expect(isAlive(child.pid as number)).toBe(false);
+      // The direct kill actually ended the child, so give-up and release did not run.
+      expect(platform.unrefed.has(child.pid as number)).toBe(false);
     },
   );
 
@@ -95,23 +106,33 @@ describe('an unsuccessful tree kill never leaves shutdown waiting', () => {
       const run = runUpdateCommand(process.execPath, IDLE, tmpdir(), 30_000, controller.signal);
       await expect.poll(() => platform.children[0]?.pid).toBeDefined();
       const child = platform.children[0] as ChildProcess;
+      expect(child.pid).toBeDefined();
       controller.abort();
       const elapsed = timed(run);
       await expect(run).rejects.toMatchObject({ failure: 'cancelled' });
       expect(await elapsed).toBeLessThan(SETTLE_BOUND_MS);
       // The command gave up on the child; teardown ends it.
-      expect(isAlive(child.pid ?? 0)).toBe(true);
+      expect(isAlive(child.pid as number)).toBe(true);
+      // Give-up releases the child's pipe and handle so neither keeps the CLI
+      // open; the 'error' direct kill path short-circuits the promise before
+      // boundExit's second grace completes, so poll until release has happened.
+      await expect.poll(() => child.stdout?.destroyed, { timeout: SETTLE_BOUND_MS }).toBe(true);
+      expect(platform.unrefed.has(child.pid as number)).toBe(true);
     },
   );
 
   it('returns from ProcessTracker.cleanup when the tracked child does not exit', async () => {
     const child = spawn(process.execPath, IDLE, { stdio: 'ignore' });
     spawned.push(child);
+    const unrefSpy = vi.spyOn(child, 'unref');
     const tracker = new ProcessTracker();
     tracker.track(childOwned(child));
     expect(await timed(tracker.cleanup(20))).toBeLessThan(20 + KILL_EXIT_GRACE_MS + 2_000);
     expect(tracker.size).toBe(0);
-    expect(isAlive(child.pid ?? 0)).toBe(true);
+    expect(child.pid).toBeDefined();
+    expect(isAlive(child.pid as number)).toBe(true);
+    // Give-up released the abandoned child so it cannot hold the CLI event loop open.
+    expect(unrefSpy).toHaveBeenCalledTimes(1);
   });
 
   it('rejects a timed out runProcess when the tracked child does not exit', async () => {
@@ -120,6 +141,12 @@ describe('an unsuccessful tree kill never leaves shutdown waiting', () => {
     const elapsed = timed(run);
     await expect(run).rejects.toMatchObject({ data: { code: 'timeout' } });
     expect(await elapsed).toBeLessThan(100 + KILL_EXIT_GRACE_MS + 2_000);
-    await tracker.cleanup(20);
+    // Give-up released the abandoned child so it cannot hold the CLI event loop open.
+    const child = platform.children[0] as ChildProcess;
+    expect(child.pid).toBeDefined();
+    expect(child.stdin?.destroyed).toBe(true);
+    expect(child.stdout?.destroyed).toBe(true);
+    expect(child.stderr?.destroyed).toBe(true);
+    expect(platform.unrefed.has(child.pid as number)).toBe(true);
   });
 });

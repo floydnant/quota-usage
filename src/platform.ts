@@ -80,8 +80,9 @@ const TREE_KILL_TIMEOUT_MS = 5_000;
 export const KILL_EXIT_GRACE_MS = 2_000;
 
 /**
- * Resolves `true` once `promise` settles, or `false` after `ms`. It never
- * rejects, and its timer is cleared and unref'd so it never holds the process open.
+ * Resolves `true` once `promise` settles (fulfilled or rejected), or `false`
+ * after `ms`. It never rejects, and its timer is cleared and unref'd so it
+ * never holds the process open.
  */
 export function settlesWithin(promise: Promise<unknown>, ms: number): Promise<boolean> {
   let timer: NodeJS.Timeout | undefined;
@@ -100,16 +101,32 @@ export function settlesWithin(promise: Promise<unknown>, ms: number): Promise<bo
 export function exitsWithin(child: ChildProcess, ms: number): Promise<boolean> {
   if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true);
   return new Promise((resolve) => {
-    const finish = (exited: boolean): void => {
+    // `finish` references `timer` and `onExit` before their declaration lines,
+    // so `function` hoisting keeps the Temporal Dead Zone out of the exit path.
+    function finish(exited: boolean): void {
       clearTimeout(timer);
       child.off('exit', onExit);
       resolve(exited);
-    };
+    }
     const onExit = (): void => finish(true);
     const timer = setTimeout(finish, ms, false);
     timer.unref();
     child.once('exit', onExit);
   });
+}
+
+/**
+ * Releases a child that give-up paths cannot wait for any longer. Each stdio
+ * stream the child still has open is destroyed and the child itself is unref'd,
+ * so a surviving pipe or handle cannot keep the CLI event loop alive after
+ * `process.exitCode` is set. Node exits through `exitCode`, never `exit()`;
+ * a referenced child or an open pipe keeps the loop active indefinitely.
+ */
+export function releaseChild(child: ChildProcess): void {
+  child.stdin?.destroy();
+  child.stdout?.destroy();
+  child.stderr?.destroy();
+  child.unref();
 }
 
 /**

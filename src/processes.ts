@@ -1,13 +1,25 @@
 import type { ChildProcess, ChildProcessWithoutNullStreams } from 'node:child_process';
 import { once } from 'node:events';
 import { UsageError } from './errors.js';
-import { KILL_EXIT_GRACE_MS, killOwnedTree, settlesWithin, spawnExecutable } from './platform.js';
+import {
+  KILL_EXIT_GRACE_MS,
+  killOwnedTree,
+  releaseChild,
+  settlesWithin,
+  spawnExecutable,
+} from './platform.js';
 
 export interface OwnedProcess {
   pid?: number | undefined;
   /** May return a promise that settles when the kill operation has finished. */
   kill(signal?: NodeJS.Signals): boolean | Promise<unknown> | undefined;
   exited?: Promise<unknown>;
+  /**
+   * Called by cleanup paths that stopped waiting for the child to exit: it
+   * destroys any stdio pipes still open and unrefs the child, so a surviving
+   * grandchild cannot keep the CLI event loop alive.
+   */
+  release?: () => void;
 }
 
 const settled = (value: unknown): Promise<void> =>
@@ -52,25 +64,22 @@ export class ProcessTracker {
     await Promise.all(
       processes.map(async (process) => {
         if (!process.exited) return;
-        await Promise.race([
-          process.exited.catch(() => undefined),
-          new Promise((resolve) => setTimeout(resolve, graceMs)),
-        ]);
+        await settlesWithin(process.exited, graceMs);
       }),
     );
     for (const process of processes) {
       if (this.owned.has(process)) kills.push(settled(process.kill('SIGKILL')));
     }
     // Tree kills are bounded by the platform layer. A child that still does not
-    // exit after the forced kill gets one more grace period, then is given up on.
+    // exit after the forced kill gets one more grace period, then is released:
+    // its stdio pipes are destroyed and it is unref'd so it cannot hold the CLI
+    // event loop open after the final exit code is set.
     await Promise.all(kills);
-    await settlesWithin(
-      Promise.all(
-        processes.flatMap((process) =>
-          process.exited ? [process.exited.catch(() => undefined)] : [],
-        ),
-      ),
-      KILL_EXIT_GRACE_MS,
+    await Promise.all(
+      processes.map(async (process) => {
+        if (!process.exited) return;
+        if (!(await settlesWithin(process.exited, KILL_EXIT_GRACE_MS))) process.release?.();
+      }),
     );
     for (const process of processes) this.owned.delete(process);
   }
@@ -119,6 +128,7 @@ export async function runProcess(
     pid: child.pid,
     kill: (signal) => killOwnedTree(child, signal),
     exited,
+    release: () => releaseChild(child),
   });
   let stdout = '';
   let stderr = '';
@@ -152,7 +162,7 @@ export async function runProcess(
   } catch (error) {
     const forced = killOwnedTree(child, 'SIGKILL');
     await Promise.all([timeoutKill, forced]);
-    await settlesWithin(exited, KILL_EXIT_GRACE_MS);
+    if (!(await settlesWithin(exited, KILL_EXIT_GRACE_MS))) releaseChild(child);
     throw error;
   } finally {
     clearTimeout(timeoutHandle);
@@ -164,5 +174,6 @@ export function childOwned(child: ChildProcess): OwnedProcess {
     ...(child.pid === undefined ? {} : { pid: child.pid }),
     kill: (signal) => killOwnedTree(child, signal),
     exited: once(child, 'exit'),
+    release: () => releaseChild(child),
   };
 }

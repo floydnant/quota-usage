@@ -4,7 +4,13 @@ import { once } from 'node:events';
 import { createInterface } from 'node:readline';
 import { UsageError } from '../errors.js';
 import { parseVersion, compareVersions, vendorEnvironment } from '../executable.js';
-import { KILL_EXIT_GRACE_MS, killOwnedTree, settlesWithin, spawnExecutable } from '../platform.js';
+import {
+  KILL_EXIT_GRACE_MS,
+  killOwnedTree,
+  releaseChild,
+  settlesWithin,
+  spawnExecutable,
+} from '../platform.js';
 import { childOwned, ProcessTracker, runProcess } from '../processes.js';
 import type {
   AccountConfig,
@@ -283,7 +289,9 @@ class JsonRpcSession {
     ]);
     if (this.child.exitCode === null) this.kill('SIGKILL');
     await Promise.all(this.kills);
-    await settlesWithin(this.exited, KILL_EXIT_GRACE_MS);
+    // A child that still has not exited is given up on: its stdio pipes and
+    // handle are released so a surviving app-server cannot keep the CLI alive.
+    if (!(await settlesWithin(this.exited, KILL_EXIT_GRACE_MS))) releaseChild(this.child);
   }
 }
 

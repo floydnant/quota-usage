@@ -18,6 +18,7 @@ import {
   isWindows,
   KILL_EXIT_GRACE_MS,
   killWindowsTree,
+  releaseChild,
   settlesWithin,
   spawnExecutable,
 } from './platform.js';
@@ -122,10 +123,9 @@ export const runUpdateCommand: UpdateCommand = (command, args, cwd, timeoutMs, s
         /* Child already exited. */
       }
       if (await settlesWithin(closed, KILL_EXIT_GRACE_MS)) return;
-      // Stop waiting for a child that ignores every kill, and do not let its pipe
-      // or handle keep the CLI open.
-      child.stdout?.destroy();
-      child.unref();
+      // Stop waiting for a child that ignores every kill, and release its stdio
+      // pipe and handle so neither keeps the CLI event loop alive.
+      releaseChild(child);
       settle(finish(null));
     };
     const terminate = (): void => {
