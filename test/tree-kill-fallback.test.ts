@@ -4,6 +4,7 @@ import {
   exitsWithin,
   KILL_EXIT_GRACE_MS,
   killOwnedTree,
+  killTreeThenDirect,
   releaseChild,
   settlesWithin,
 } from '../src/platform.js';
@@ -80,7 +81,7 @@ describe('bounded waits on killed children', () => {
   });
 
   it.runIf(process.platform === 'win32')(
-    'kills the child directly when the Windows tree kill fails',
+    'kills the child directly through its defensive catch when killWindowsTree never rejects',
     async () => {
       const child = idle();
       const started = Date.now();
@@ -89,4 +90,55 @@ describe('bounded waits on killed children', () => {
       await expect(exitsWithin(child, 5_000)).resolves.toBe(true);
     },
   );
+
+  // Platform-agnostic coverage of the direct-kill fallback: Floyd's CI runs
+  // on macOS where the Windows-only branch above is skipped, so a mutation on
+  // the fallback would otherwise be invisible.
+  describe('killTreeThenDirect fallback', () => {
+    it('kills the child directly when the tree kill is a no-op', async () => {
+      const child = idle();
+      const treeKill = vi.fn(async (): Promise<void> => undefined);
+      const started = Date.now();
+      await killTreeThenDirect(child, 'SIGKILL', treeKill);
+      expect(treeKill).toHaveBeenCalledWith(child.pid);
+      await expect.poll(() => isAlive(child.pid as number), { timeout: 5_000 }).toBe(false);
+      expect(Date.now() - started).toBeLessThan(KILL_EXIT_GRACE_MS + 2_000);
+    });
+
+    it('does not call the direct kill when the tree kill already ended the child', async () => {
+      const child = idle();
+      const processKillSpy = vi.spyOn(process, 'kill');
+      try {
+        const treeKill = vi.fn(async (): Promise<void> => {
+          // The treeKill ends the child itself without going through process.kill,
+          // so a direct-kill fallback would be the only remaining process.kill call.
+          child.kill('SIGKILL');
+        });
+        await killTreeThenDirect(child, 'SIGKILL', treeKill);
+        // Wait for exit without probing with process.kill (isAlive would count).
+        await expect
+          .poll(() => child.exitCode !== null || child.signalCode !== null, { timeout: 5_000 })
+          .toBe(true);
+        expect(processKillSpy).not.toHaveBeenCalled();
+      } finally {
+        processKillSpy.mockRestore();
+      }
+    });
+
+    it('resolves when the direct kill throws synchronously', async () => {
+      const child = idle();
+      const processKillSpy = vi.spyOn(process, 'kill').mockImplementationOnce((): true => {
+        const error = new Error('operation not permitted') as NodeJS.ErrnoException;
+        error.code = 'EPERM';
+        throw error;
+      });
+      try {
+        const treeKill = vi.fn(async (): Promise<void> => undefined);
+        await expect(killTreeThenDirect(child, 'SIGKILL', treeKill)).resolves.toBeUndefined();
+        expect(processKillSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        processKillSpy.mockRestore();
+      }
+    });
+  });
 });

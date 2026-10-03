@@ -146,11 +146,37 @@ export function killOwnedTree(
     child.kill(signal);
     return Promise.resolve();
   }
+  return killTreeThenDirect(child, signal, killWindowsTree);
+}
+
+/**
+ * Awaits one tree kill and, if the child outlived it, delivers a direct kill
+ * through `process.kill`. `process.kill` throws synchronously (ESRCH / EPERM)
+ * instead of emitting the `'error'` event that `child.kill` can emit, so any
+ * `once(child, 'exit')` consumer the tracker holds does not reject raw.
+ *
+ * Exported for the platform-agnostic fallback tests. It never rejects.
+ *
+ * @internal
+ */
+export function killTreeThenDirect(
+  child: ChildProcess,
+  signal: NodeJS.Signals,
+  treeKill: (pid: number) => Promise<void>,
+): Promise<void> {
+  if (child.pid === undefined) return Promise.resolve();
   if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
-  return killWindowsTree(child.pid)
+  const pid = child.pid;
+  return treeKill(pid)
     .then(() => exitsWithin(child, KILL_EXIT_GRACE_MS))
     .then((exited) => {
-      if (!exited) child.kill(signal);
+      if (exited) return;
+      try {
+        process.kill(pid, signal);
+      } catch {
+        /* ESRCH (child already gone) or EPERM (beyond our reach); both are
+           terminal for this cleanup path, so swallow and resolve. */
+      }
     })
     .catch(() => undefined);
 }
