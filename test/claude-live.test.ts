@@ -125,10 +125,66 @@ Extra usage balance remaining: $12.50`,
     ).toBe('2026-08-29T00:00:00.000Z');
   });
 
+  it('parses the comma-separated reset dates printed by Claude Code 2.1.284', () => {
+    const result = parseClaudeUsageText(
+      `You are currently using your subscription to power your Claude Code usage
+
+Current session: 2% used · resets Sep 29, 2:50am (Europe/Berlin)
+Current week (all models): 47% used · resets Oct 3, 2am (Europe/Berlin)`,
+      account,
+      new Date('2026-09-28T20:00:00Z'),
+    );
+    expect(result.windows).toMatchObject([
+      { id: 'five_hour', resetAt: '2026-09-29T00:50:00.000Z' },
+      { id: 'seven_day', resetAt: '2026-10-03T00:00:00.000Z' },
+    ]);
+  });
+
+  it('rejects explicit provider errors shown alongside a cost summary', () => {
+    const loadFailure = ['provider_failure', 'Claude could not load usage data', true] as const;
+    const networkFailure = ['provider_failure', 'Claude reported a network error', true] as const;
+    const cases = [
+      ['Failed to load usage data\nTotal cost: $0.0000', ...loadFailure],
+      ['usage endpoint is rate limited\nTotal cost: $0.0000', ...loadFailure],
+      ['Network error\nTotal cost: $0.0000', ...networkFailure],
+      ['Network error: unable to connect\nTotal cost: $0.0000', ...networkFailure],
+      [
+        'Update available: new version is available\nTotal cost: $0.0000',
+        'provider_failure',
+        'Claude displayed an upgrade notice',
+        false,
+      ],
+      [
+        'Please log in to Claude Code\nTotal cost: $0.0000',
+        'logged_out_account',
+        'Claude account work is logged out',
+        false,
+      ],
+    ] as const;
+    for (const [text, code, message, retryable] of cases) {
+      expect(() => parseClaudeUsageText(text, account)).toThrow(
+        expect.objectContaining({
+          data: { code, message, retryable, provider: 'claude', accountLabel: 'work' },
+        }),
+      );
+    }
+  });
+
   it('rejects provider errors, unrelated percentages, and malformed envelopes', () => {
     expect(() => parseClaudeUsageText('Please log in to Claude Code', account)).toThrow(
       'logged out',
     );
+    // A logged-out Claude Code 2.1.284 answers /usage with the local cost summary only.
+    expect(() =>
+      parseClaudeUsageText(
+        `Total cost:            $0.0000
+Total duration (API):  0s
+Total duration (wall): 1s
+Total code changes:    0 lines added, 0 lines removed
+Usage:                 0 input, 0 output, 0 cache read, 0 cache write`,
+        account,
+      ),
+    ).toThrow('logged out');
     expect(() => parseClaudeUsageText('Failed to load usage data', account)).toThrow(
       'could not load',
     );
