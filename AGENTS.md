@@ -6,7 +6,7 @@ This file applies to the entire repository. Read it before changing code, then r
 
 ## Product boundary
 
-`quota-usage` is a macOS-only Node.js CLI for ChatGPT Codex and Claude Code
+`quota-usage` is a macOS and Windows Node.js CLI for ChatGPT Codex and Claude Code
 **subscription quota windows**. It is not an API billing, spend, token-cost, or
 API rate-limit tool. The binary is `usage`; the package is `quota-usage`.
 
@@ -41,7 +41,10 @@ These invariants are settled:
 
 ## Working conventions
 
-- Runtime target: macOS, Node.js 22+, strict TypeScript, ESM.
+- Runtime target: macOS and Windows, Node.js 22+, strict TypeScript, ESM.
+- Keep platform differences in `src/platform.ts`: start vendor CLIs with
+  `spawnExecutable` (it handles Windows `.cmd` shims without a shell) and end
+  owned children with `killOwnedTree`. Test fakes use `test/fake-executable.ts`.
 - Direct dependency versions are exact. Keep runtime dependencies small and
   update `package-lock.json` with any dependency change.
 - Use `UsageError` and the stable error codes in `src/types.ts`; public error

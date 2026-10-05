@@ -5,6 +5,10 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { describe, expect, it } from 'vitest';
 import { startAutoUpdate } from '../src/auto-update.js';
 import { runUpdateCommand, updateCheckout, type UpdateCommand } from '../src/update-checkout.js';
+import { isAlive, killSurvivors, waitForPids, writeTreeScript } from './process-tree.js';
+
+// Real git worktrees are slow to spawn on Windows; the default one-second poll is too tight.
+const POLL = { timeout: 10_000 };
 
 async function fixture() {
   const home = await realpath(await mkdtemp(join(tmpdir(), 'usage-updater-')));
@@ -198,7 +202,7 @@ describe('background checkout updater', () => {
     const update = startAutoUpdate(options);
     try {
       await expect
-        .poll(() => readFile(join(f.root, 'dist', 'cli.js'), 'utf8').catch(() => ''))
+        .poll(() => readFile(join(f.root, 'dist', 'cli.js'), 'utf8').catch(() => ''), POLL)
         .toBe('new build');
       expect(messages).toEqual([]);
     } finally {
@@ -220,7 +224,10 @@ describe('background checkout updater', () => {
     });
     try {
       await expect
-        .poll(async () => checked && !(await stat(join(f.state, 'lock')).catch(() => undefined)))
+        .poll(
+          async () => checked && !(await stat(join(f.state, 'lock')).catch(() => undefined)),
+          POLL,
+        )
         .toBe(true);
     } finally {
       await unchanged.close();
@@ -291,11 +298,13 @@ describe('background checkout updater', () => {
     });
     try {
       await expect
-        .poll(() =>
-          stat(ready).then(
-            () => true,
-            () => false,
-          ),
+        .poll(
+          () =>
+            stat(ready).then(
+              () => true,
+              () => false,
+            ),
+          POLL,
         )
         .toBe(true);
       const pids = JSON.parse(await readFile(ready, 'utf8')) as number[];
@@ -349,5 +358,62 @@ describe('background checkout updater', () => {
       report: () => {},
     });
     await update.close();
+  });
+
+  describe.runIf(process.platform === 'win32')('Windows tree kill lifecycle', () => {
+    const settlesAfterTreeKill = async (
+      start: (
+        script: string,
+        pidsFile: string,
+      ) => {
+        run: Promise<unknown>;
+        stop?: () => void;
+      },
+      failure: 'cancelled' | 'timeout',
+    ): Promise<void> => {
+      const dir = await mkdtemp(join(tmpdir(), 'usage-update-tree-'));
+      const pidsFile = join(dir, 'pids.json');
+      let verified = false;
+      try {
+        const { run, stop } = start(await writeTreeScript(dir), pidsFile);
+        void run.catch(() => undefined);
+        const pids = await waitForPids(pidsFile);
+        stop?.();
+        await expect(run).rejects.toMatchObject({ failure });
+        expect(pids.filter(isAlive)).toEqual([]);
+        verified = true;
+      } finally {
+        if (!verified) await killSurvivors(pidsFile);
+        await rm(dir, { recursive: true, force: true });
+      }
+    };
+
+    it('does not settle a cancelled command until taskkill has ended its descendants', async () => {
+      const controller = new AbortController();
+      await settlesAfterTreeKill(
+        (script, pidsFile) => ({
+          run: runUpdateCommand(
+            process.execPath,
+            [script, pidsFile],
+            tmpdir(),
+            30_000,
+            controller.signal,
+          ),
+          stop: () => {
+            controller.abort();
+          },
+        }),
+        'cancelled',
+      );
+    });
+
+    it('does not settle a timed out command until taskkill has ended its descendants', async () => {
+      await settlesAfterTreeKill(
+        (script, pidsFile) => ({
+          run: runUpdateCommand(process.execPath, [script, pidsFile], tmpdir(), 5_000),
+        }),
+        'timeout',
+      );
+    });
   });
 });

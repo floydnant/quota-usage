@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -9,6 +9,7 @@ import {
 } from '../src/providers/claude-live.js';
 import { ProcessTracker } from '../src/processes.js';
 import type { AccountConfig } from '../src/types.js';
+import { writeFakeExecutable } from './fake-executable.js';
 
 const account: AccountConfig = {
   provider: 'claude',
@@ -19,7 +20,7 @@ const account: AccountConfig = {
 
 async function fakeClaude(directory: string): Promise<string> {
   const executable = join(directory, 'claude');
-  await writeFile(
+  return writeFakeExecutable(
     executable,
     `#!/usr/bin/env node
 const fs = require('node:fs');
@@ -47,8 +48,6 @@ if (process.env.FAKE_DELAY_MS) setTimeout(respond, Number(process.env.FAKE_DELAY
 else respond();
 `,
   );
-  await chmod(executable, 0o700);
-  return executable;
 }
 
 describe('Claude noninteractive live collection', () => {

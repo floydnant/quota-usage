@@ -12,6 +12,7 @@ import {
   vendorEnvironment,
 } from './executable.js';
 import { canonicalStateStillMatches, collectorPaths } from './accounts.js';
+import { isWindows } from './platform.js';
 import { ProcessTracker, runProcess } from './processes.js';
 import { appPaths } from './paths.js';
 import { MIN_CLAUDE_MULTI_ACCOUNT_VERSION } from './providers/claude-live.js';
@@ -177,8 +178,10 @@ export async function doctor(
       const mode = info.mode & 0o777;
       checks.push({
         name: `${account.provider}:${account.label} cache`,
-        ok: cached.status !== 'expired' && mode === 0o600,
-        detail: `${cached.status}, mode ${mode.toString(8).padStart(4, '0')}`,
+        ok: cached.status !== 'expired' && (isWindows || mode === 0o600),
+        detail: isWindows
+          ? cached.status
+          : `${cached.status}, mode ${mode.toString(8).padStart(4, '0')}`,
       });
     } catch (error) {
       checks.push({

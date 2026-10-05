@@ -11,7 +11,8 @@ function run(home: string, args: string[]) {
       ['dist/cli.js', '--no-update', ...args],
       {
         // Isolate the CLI's home lookup; cached/list commands must never start vendors.
-        env: { ...process.env, HOME: home },
+        // Windows resolves the home directory from USERPROFILE rather than HOME.
+        env: { ...process.env, HOME: home, USERPROFILE: home },
         timeout: 5_000,
       },
       (error, stdout, stderr) =>

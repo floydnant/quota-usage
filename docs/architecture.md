@@ -104,12 +104,35 @@ keys and explicit OAuth-token environment variables are removed in both cases.
 ~/.local/share/usage/                directories 0700
 ~/.local/share/usage/accounts/       managed vendor state
 ~/.local/share/usage/bin/            compiled collector and owner-only backups
-~/Library/Caches/usage/              cache files 0600
+~/Library/Caches/usage/              cache files 0600 (Windows: ~/AppData/Local/usage/Cache/)
 ```
 
 Managed purge requires the exact expected path, no symlinks, a matching random
 ownership marker, successful official logout, and a collision-safe move to
-macOS Trash. External/default state is never purged.
+macOS Trash (`~/.Trash` on Windows). External/default state is never purged.
+
+On Windows, POSIX modes are not enforced; the user profile's ACLs protect these
+paths and `doctor` skips mode checks. Owned children are ended with
+`taskkill /T` because Windows has no process groups and a `.cmd` shim would
+otherwise leave the real vendor program running. Each tree kill is awaited:
+process cleanup, timeouts, updater cancellation, and Codex session close do not
+finish until taskkill has exited. Each taskkill run is bounded at five seconds,
+after which the taskkill itself is ended. A tree kill that fails or times out
+never leaves those paths waiting: a child that has not exited within a short
+grace period is killed directly, and one that still does not exit is given up
+on after another grace period, so cancellation, timeout, and cleanup always
+settle. On give-up the surviving child's stdio pipes are destroyed and the
+child is unref'd so neither keeps the CLI event loop alive, and no additional
+taskkill is started for a child that has already been abandoned. The worst
+case for an updater command that ignores every signal is therefore the 300 ms
+`SIGTERM`-to-`SIGKILL` escalation, two bounded `taskkill` runs that overlap
+within about five seconds, and two `KILL_EXIT_GRACE_MS` exit waits.
+
+The direct-kill fallback that runs after taskkill fails reaches only the root
+child this program started. A `.cmd` shim is spawned as cmd.exe hosting the
+real vendor program, so the fallback ends cmd.exe but the vendor program it
+spawned can outlive it. The normal `taskkill /T` path still ends the whole
+tree; the fallback is a bound on waiting, not a replacement.
 
 ## Packaging
 

@@ -1,8 +1,13 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { EventEmitter } from 'node:events';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { killWindowsTree } from '../src/platform.js';
 import { childOwned, ProcessTracker, runProcess } from '../src/processes.js';
+import { isAlive, killSurvivors, waitForPids, writeTreeScript } from './process-tree.js';
 
 describe('process ownership and cleanup', () => {
   it('terminates tracked children on cleanup but never touches untracked children', async () => {
@@ -61,6 +66,7 @@ describe('process ownership and cleanup', () => {
     tracker.track({
       kill: (signal) => {
         signals.push(String(signal));
+        return true;
       },
     });
     tracker.track({ kill: () => true, exited: Promise.reject(new Error('already failed')) });
@@ -97,9 +103,18 @@ describe('process ownership and cleanup', () => {
     });
     tracker.track({ kill: () => undefined, exited });
     const first = tracker.cleanup(20);
-    await expect(tracker.cleanup(20)).resolves.toBeUndefined();
+    const second = tracker.cleanup(20);
+    // A concurrent caller shares the in-flight cleanup instead of returning early.
+    expect(second).toBe(first);
+    let secondSettled = false;
+    void second.then(() => (secondSettled = true));
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(secondSettled).toBe(false);
     resolveExit?.();
+    await expect(second).resolves.toBeUndefined();
     await first;
+    // Once finished, a later cleanup starts a fresh run.
+    expect(tracker.cleanup(20)).not.toBe(first);
 
     const signaled = await runProcess(
       process.execPath,
@@ -115,5 +130,71 @@ describe('process ownership and cleanup', () => {
     const owned = childOwned(emitter);
     expect(owned).not.toHaveProperty('pid');
     emitter.emit('exit', 0, null);
+  });
+
+  describe.runIf(process.platform === 'win32')('Windows tree kill lifecycle', () => {
+    it('resolves killWindowsTree only after taskkill has ended the whole tree', async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'usage-tree-'));
+      const pidsFile = join(dir, 'pids.json');
+      let verified = false;
+      try {
+        spawn(process.execPath, [await writeTreeScript(dir), pidsFile], { stdio: 'ignore' });
+        const pids = await waitForPids(pidsFile);
+        // A taskkill that outlives its bound is abandoned and the promise still settles.
+        const started = Date.now();
+        await killWindowsTree(pids[0] ?? 0, 1);
+        expect(Date.now() - started).toBeLessThan(2_000);
+        await killWindowsTree(pids[0] ?? 0);
+        expect(pids.filter(isAlive)).toEqual([]);
+        verified = true;
+      } finally {
+        if (!verified) await killSurvivors(pidsFile);
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('does not finish cleanup until taskkill has ended the owned grandchild', async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'usage-tree-'));
+      const pidsFile = join(dir, 'pids.json');
+      const pids: number[] = [];
+      let verified = false;
+      try {
+        const tracker = new ProcessTracker();
+        const child = spawn(process.execPath, [await writeTreeScript(dir), pidsFile], {
+          stdio: 'ignore',
+        });
+        if (child.pid) pids.push(child.pid);
+        tracker.track(childOwned(child));
+        pids.push(...(await waitForPids(pidsFile)));
+        await tracker.cleanup(20);
+        expect(pids.filter(isAlive)).toEqual([]);
+        expect(tracker.size).toBe(0);
+        verified = true;
+      } finally {
+        if (!verified) await killSurvivors(pidsFile, pids);
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('does not reject a timed out process until its owned tree is gone', async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'usage-tree-'));
+      const pidsFile = join(dir, 'pids.json');
+      let verified = false;
+      try {
+        const tracker = new ProcessTracker();
+        const run = runProcess(process.execPath, [await writeTreeScript(dir), pidsFile], {
+          timeoutMs: 5_000,
+          tracker,
+        });
+        void run.catch(() => undefined);
+        const pids = await waitForPids(pidsFile);
+        await expect(run).rejects.toMatchObject({ data: { code: 'timeout' } });
+        expect(pids.filter(isAlive)).toEqual([]);
+        verified = true;
+      } finally {
+        if (!verified) await killSurvivors(pidsFile);
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
   });
 });

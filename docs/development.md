@@ -2,7 +2,8 @@
 
 ## Setup and fast feedback
 
-Use macOS with Node.js 22 or newer:
+Use macOS or Windows with Node.js 22 or newer. On Windows, run the scripts from
+Git Bash or PowerShell; Git for Windows is required for the updater tests:
 
 ```sh
 npm ci

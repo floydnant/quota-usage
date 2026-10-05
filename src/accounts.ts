@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import {
   chmod,
@@ -32,6 +31,7 @@ import {
   defaultStateDir,
   ensurePrivateDir,
 } from './paths.js';
+import { isWindows, spawnExecutable } from './platform.js';
 import { childOwned, ProcessTracker, runProcess } from './processes.js';
 import type { Confirm } from './prompt.js';
 import { CodexAdapter, identityHash, maskEmail } from './providers/codex.js';
@@ -42,6 +42,33 @@ const MARKER_FILE = '.usage-owner';
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+// Claude Code runs Windows status lines through Git Bash, or PowerShell without
+// it. Double quotes and forward slashes mean the same thing in both shells.
+function windowsQuote(value: string): string {
+  if (/["$`]/.test(value)) {
+    throw new UsageError(
+      'invalid_configuration',
+      `Cannot use a path containing ", $, or \` in a Windows status-line command: ${value}`,
+    );
+  }
+  return `"${value.replaceAll('\\', '/')}"`;
+}
+
+function collectorCommand(
+  files: { helper: string; cache: string; previous: string },
+  label: string,
+  chained: boolean,
+): string {
+  if (isWindows) {
+    return `node ${windowsQuote(files.helper)} --label ${windowsQuote(label)} --cache ${windowsQuote(files.cache)}${
+      chained ? ` --previous-file ${windowsQuote(files.previous)}` : ''
+    }`;
+  }
+  return `${shellQuote(files.helper)} --label ${shellQuote(label)} --cache ${shellQuote(files.cache)}${
+    chained ? ` --previous-file ${shellQuote(files.previous)}` : ''
+  }`;
 }
 
 async function atomicJson(path: string, value: unknown, mode = 0o600): Promise<void> {
@@ -64,7 +91,7 @@ async function interactiveVendor(
   env: NodeJS.ProcessEnv,
   tracker: ProcessTracker,
 ): Promise<void> {
-  const child = spawn(executable, args, { shell: false, stdio: 'inherit', env });
+  const child = spawnExecutable(executable, args, { stdio: 'inherit', env });
   tracker.track(childOwned(child));
   const [code] = (await once(child, 'exit')) as [number | null, NodeJS.Signals | null];
   if (code !== 0)
@@ -153,9 +180,7 @@ export async function installClaudeCollector(
   const settings = await readSettings(account);
   const previous = settings.statusLine;
   const files = collectorPaths(store, account.label);
-  const command = `${shellQuote(files.helper)} --label ${shellQuote(account.label)} --cache ${shellQuote(files.cache)}${
-    previous === undefined ? '' : ` --previous-file ${shellQuote(files.previous)}`
-  }`;
+  const command = collectorCommand(files, account.label, previous !== undefined);
   const preview = [
     `Claude settings: ${settingsPath(account)}`,
     `Current statusLine: ${previous === undefined ? '(none)' : JSON.stringify(previous)}`,

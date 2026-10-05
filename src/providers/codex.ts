@@ -1,9 +1,16 @@
 import { createHash } from 'node:crypto';
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { once } from 'node:events';
 import { createInterface } from 'node:readline';
 import { UsageError } from '../errors.js';
 import { parseVersion, compareVersions, vendorEnvironment } from '../executable.js';
+import {
+  KILL_EXIT_GRACE_MS,
+  killOwnedTree,
+  releaseChild,
+  settlesWithin,
+  spawnExecutable,
+} from '../platform.js';
 import { childOwned, ProcessTracker, runProcess } from '../processes.js';
 import type {
   AccountConfig,
@@ -173,17 +180,17 @@ class JsonRpcSession {
   private malformed: UsageError | undefined;
   readonly child: ChildProcessWithoutNullStreams;
   readonly exited: Promise<unknown>;
+  private readonly kills: Promise<void>[] = [];
 
   constructor(
     executable: string,
     stateDir: string,
     private readonly tracker: ProcessTracker,
   ) {
-    this.child = spawn(executable, ['app-server', '--stdio'], {
-      shell: false,
+    this.child = spawnExecutable(executable, ['app-server', '--stdio'], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: vendorEnvironment('codex', stateDir),
-    });
+    }) as ChildProcessWithoutNullStreams;
     this.exited = once(this.child, 'exit');
     this.tracker.track(childOwned(this.child));
     const lines = createInterface({ input: this.child.stdout });
@@ -264,19 +271,24 @@ class JsonRpcSession {
     });
   }
 
+  /** Starts an owned tree kill that `close()` drains before it resolves. */
+  kill(signal: NodeJS.Signals): void {
+    this.kills.push(killOwnedTree(this.child, signal));
+  }
+
   async close(): Promise<void> {
     this.child.stdin.end();
-    await Promise.race([
-      this.exited.catch(() => undefined),
-      new Promise((r) => setTimeout(r, 300)),
-    ]);
-    if (this.child.exitCode === null) this.child.kill('SIGTERM');
-    await Promise.race([
-      this.exited.catch(() => undefined),
-      new Promise((r) => setTimeout(r, 200)),
-    ]);
-    if (this.child.exitCode === null) this.child.kill('SIGKILL');
-    await this.exited.catch(() => undefined);
+    // Each grace is drained through `settlesWithin`, whose timer is both
+    // cleared and unref'd; a raw `setTimeout` here would stay referenced after
+    // the race resolves and could outlive the next `process.exitCode`.
+    await settlesWithin(this.exited, 300);
+    if (this.child.exitCode === null) this.kill('SIGTERM');
+    await settlesWithin(this.exited, 200);
+    if (this.child.exitCode === null) this.kill('SIGKILL');
+    await Promise.all(this.kills);
+    // A child that still has not exited is given up on: its stdio pipes and
+    // handle are released so a surviving app-server cannot keep the CLI alive.
+    if (!(await settlesWithin(this.exited, KILL_EXIT_GRACE_MS))) releaseChild(this.child);
   }
 }
 
@@ -355,7 +367,7 @@ export class CodexAdapter implements ProviderAdapter {
         operation(),
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
-            session.child.kill('SIGTERM');
+            session.kill('SIGTERM');
             reject(
               new UsageError('timeout', `Codex check timed out for ${account.label}`, {
                 provider: 'codex',

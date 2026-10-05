@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rename, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -10,22 +10,21 @@ import { renderHuman } from '../src/render-human.js';
 import { appPaths } from '../src/paths.js';
 import { identityHash } from '../src/providers/codex.js';
 import type { AccountResult, UsageConfig } from '../src/types.js';
+import { writeFakeExecutable } from './fake-executable.js';
 
 async function failingCodex(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'failing-codex-'));
   const file = join(dir, 'codex');
-  await writeFile(
+  return writeFakeExecutable(
     file,
     `#!/usr/bin/env node\nif(process.argv.includes('--version')){console.log('codex-cli 0.150.1');process.exit()}process.exit(1)`,
   );
-  await chmod(file, 0o700);
-  return file;
 }
 
 async function workingClaude(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'working-claude-'));
   const file = join(dir, 'claude');
-  await writeFile(
+  return writeFakeExecutable(
     file,
     `#!/usr/bin/env node
 if (process.argv.includes('--version')) {
@@ -38,8 +37,6 @@ console.log(JSON.stringify({
 }));
 `,
   );
-  await chmod(file, 0o700);
-  return file;
 }
 
 describe('collection aggregation', () => {
@@ -173,7 +170,7 @@ describe('discovered subscriptions', () => {
     for (const name of ['.codex-good', '.codex-off', '.claude-off']) await mkdir(join(home, name));
     const codex = join(home, 'fake-codex');
     const claude = join(home, 'fake-claude');
-    await writeFile(
+    await writeFakeExecutable(
       codex,
       `#!/usr/bin/env node
 if (process.argv.includes('--version')) { console.log('codex-cli 0.150.1'); process.exit(0); }
@@ -186,14 +183,12 @@ lines.on('line', line => {
   if (m.method === 'account/rateLimits/read') console.log(JSON.stringify({id:m.id,result:{rateLimits:{primary:{usedPercent:42}}}}));
 });`,
     );
-    await writeFile(
+    await writeFakeExecutable(
       claude,
       `#!/usr/bin/env node
 if (process.argv.includes('--version')) { console.log('2.1.250 (Claude Code)'); process.exit(0); }
 console.log(JSON.stringify({is_error:true,result:'Not logged in. Please run /login'}));`,
     );
-    await chmod(codex, 0o700);
-    await chmod(claude, 0o700);
     const request = {
       config: {
         ...DEFAULT_CONFIG,

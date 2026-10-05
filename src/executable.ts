@@ -2,6 +2,7 @@ import { access } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { delimiter, isAbsolute, join } from 'node:path';
 import { UsageError } from './errors.js';
+import { executableCandidates } from './platform.js';
 import type { Provider } from './types.js';
 
 export async function resolveExecutable(
@@ -10,12 +11,14 @@ export async function resolveExecutable(
   provider: Provider,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<string> {
-  const candidates = configured
-    ? [configured]
-    : (env.PATH ?? '')
-        .split(delimiter)
-        .filter(Boolean)
-        .map((directory) => join(directory, name));
+  const candidates = (
+    configured
+      ? [configured]
+      : (env.PATH ?? env.Path ?? '')
+          .split(delimiter)
+          .filter(Boolean)
+          .map((directory) => join(directory, name))
+  ).flatMap((candidate) => executableCandidates(candidate, env));
   for (const candidate of candidates) {
     if (!isAbsolute(candidate)) continue;
     if (
