@@ -46,6 +46,7 @@ describe('collection aggregation', () => {
   it('collects Claude live in default mode', async () => {
     const home = await mkdtemp(join(tmpdir(), 'collect-live-claude-'));
     const paths = appPaths(home);
+    await mkdir(join(home, '.claude'));
     const config: UsageConfig = {
       ...DEFAULT_CONFIG,
       defaults: { ...DEFAULT_CONFIG.defaults, claudeExecutable: await workingClaude() },
@@ -89,9 +90,7 @@ describe('collection aggregation', () => {
     const config: UsageConfig = {
       ...DEFAULT_CONFIG,
       defaults: { ...DEFAULT_CONFIG.defaults, claudeExecutable: '/definitely/missing' },
-      accounts: [
-        { provider: 'claude', label: 'work', stateDir: '/tmp/no-read', ownership: 'external' },
-      ],
+      accounts: [{ provider: 'claude', label: 'work', stateDir: home, ownership: 'external' }],
     };
     const summary = await collectUsage({
       config,
@@ -123,7 +122,7 @@ describe('collection aggregation', () => {
         {
           provider: 'codex',
           label: 'personal',
-          stateDir: '/tmp/fake',
+          stateDir: home,
           ownership: 'external',
           identityHash: identityHash('user@example.com'),
         },

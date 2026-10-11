@@ -34,6 +34,7 @@ document to stdout and must never contain progress text or ANSI escapes.
 | Configuration  | `src/config.ts`, `src/paths.ts`                             | Strict YAML validation, atomic writes, permissions, canonical paths                        |
 | Accounts       | `src/accounts.ts`                                           | Registration, identity setup, Claude collector install/restore, removal/purge              |
 | Discovery      | `src/discovery.ts`                                          | Directory inventory, explicit-registration precedence, directory-specific cache identities |
+| Account state  | `src/account-state.ts`                                      | Read-only directory metadata and availability guards before provider launches and output   |
 | Collection     | `src/collect.ts`, `src/selectors.ts`                        | Selection, concurrency, cache fallback, result sorting, exit aggregation                   |
 | Process safety | `src/processes.ts`, `src/executable.ts`                     | Executable resolution, scrubbed vendor environments, owned-child lifecycle                 |
 | Codex          | `src/providers/codex.ts`                                    | JSON-RPC handshake, identity verification, rate-limit normalization, retry boundary        |
@@ -169,6 +170,20 @@ registrations retain existing cache paths and identity pinning. Discovered entri
 follow whatever subscription the official CLI currently has logged into that state
 and never install a Claude collector or persist registrations. Removing a directory
 removes its inferred row at the next scan; quota cache files are removed by uninstall.
+
+Explicit registrations are filtered by directory availability too, even when
+discovery is disabled. Missing paths, files, and broken symlinks are omitted from
+the effective inventory without rewriting YAML or deleting caches. Inspection
+failures produce safe configuration errors while preserving other account results.
+Registered labels and paths still reserve their discovery precedence.
+`account-state.ts` shares metadata checks between inventory, collection, doctor,
+and provider adapters. Adapters check before account-specific launches and retries;
+collection checks before cache use/write and filters results and account errors
+against the final available inventory. A removed account cannot return through
+cache fallback. Runtime `discoveryPath` preserves the original entry path, so a
+removed/retargeted symlink or replaced canonical directory invalidates an in-flight
+discovered account. Neither runtime discovery field is accepted in YAML. Filesystem
+changes after the final check are reflected in the next collection.
 
 Human headings and `accounts list` use directory names. Runtime
 `AccountConfig.directoryName` preserves the discovered entry name even for a

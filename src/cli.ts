@@ -204,9 +204,11 @@ accounts
     try {
       const store = new ConfigStore();
       const config = await loadAccountConfig(store);
-      const inventory = program.opts<GlobalOptions>().discover
-        ? await discoverAccounts(config.accounts, store.paths.homeDir)
-        : { accounts: config.accounts, errors: [] };
+      const inventory = await discoverAccounts(
+        config.accounts,
+        store.paths.homeDir,
+        program.opts<GlobalOptions>().discover,
+      );
       process.stdout.write(
         `${listAccounts({ ...config, accounts: inventory.accounts }, options.verbose || program.opts<GlobalOptions>().verbose)}\n`,
       );
