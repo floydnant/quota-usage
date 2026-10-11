@@ -26,6 +26,11 @@ These invariants are settled:
   persist runtime discovery entries into registration YAML. Display directory
   names while preserving colon selector aliases. Only `default` can alias a
   default directory; `personal` must be an actual account label.
+- Require existing state directories for both registered and discovered inventory,
+  including `--no-discover` and cached mode. Preserve missing registrations in YAML,
+  skip vendor launches/retries for removed directories, and drop deleted or changed
+  discovered entries before returning collection results. Quota caches never define
+  inventory. Validate discovered symlink entries as well as their canonical targets.
 - High usage and reached limits never cause a failure exit code.
 - Preserve successful account results when another account fails.
 - Never read or expose credentials, OAuth tokens, API keys, Claude Keychain

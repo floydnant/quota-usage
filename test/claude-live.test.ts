@@ -223,6 +223,7 @@ Usage:                 0 input, 0 output, 0 cache read, 0 cache write`,
   it('runs print mode for default and isolated accounts with scrubbed credentials', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'claude-print-'));
     const executable = await fakeClaude(directory);
+    const liveAccount = { ...account, stateDir: directory };
     const log = join(directory, 'calls.jsonl');
     const priorLog = process.env.FAKE_LOG;
     const priorApiKey = process.env.ANTHROPIC_API_KEY;
@@ -234,10 +235,10 @@ Usage:                 0 input, 0 output, 0 cache read, 0 cache write`,
       const tracker = new ProcessTracker();
       const adapter = new ClaudeLiveAdapter(executable, tracker);
       const defaultResult = await adapter.collect(
-        { ...account, label: 'default', claudeDefault: true },
+        { ...liveAccount, label: 'default', claudeDefault: true },
         { timeoutMs: 1_000 },
       );
-      const isolatedResult = await adapter.collect(account, { timeoutMs: 1_000 });
+      const isolatedResult = await adapter.collect(liveAccount, { timeoutMs: 1_000 });
       expect(defaultResult).toMatchObject({ source: 'claude-cli' });
       expect(defaultResult.windows[0]).toMatchObject({ id: 'five_hour' });
       expect(isolatedResult).toMatchObject({ source: 'claude-cli' });
@@ -258,7 +259,7 @@ Usage:                 0 input, 0 output, 0 cache read, 0 cache write`,
     expect(calls).toHaveLength(2);
     expect(calls[0]).toMatchObject({ configDir: null, apiKey: null, oauthToken: null });
     expect(calls[1]).toMatchObject({
-      configDir: account.stateDir,
+      configDir: liveAccount.stateDir,
       apiKey: null,
       oauthToken: null,
     });
@@ -277,13 +278,14 @@ Usage:                 0 input, 0 output, 0 cache read, 0 cache write`,
   it('retries an incomplete response once and rejects unsupported versions', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'claude-retry-'));
     const executable = await fakeClaude(directory);
+    const liveAccount = { ...account, stateDir: directory };
     const retryFile = join(directory, 'retried');
     const priorRetry = process.env.FAKE_RETRY_FILE;
     process.env.FAKE_RETRY_FILE = retryFile;
     try {
       const messages: string[] = [];
       await expect(
-        new ClaudeLiveAdapter(executable, new ProcessTracker()).collect(account, {
+        new ClaudeLiveAdapter(executable, new ProcessTracker()).collect(liveAccount, {
           timeoutMs: 1_000,
           verbose: (message) => messages.push(message),
         }),
@@ -309,12 +311,13 @@ Usage:                 0 input, 0 output, 0 cache read, 0 cache write`,
   it('times out with account context and leaves no tracked child', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'claude-timeout-'));
     const executable = await fakeClaude(directory);
+    const liveAccount = { ...account, stateDir: directory };
     const tracker = new ProcessTracker();
     const priorDelay = process.env.FAKE_DELAY_MS;
     process.env.FAKE_DELAY_MS = '1000';
     try {
       await expect(
-        new ClaudeLiveAdapter(executable, tracker).collect(account, { timeoutMs: 20 }),
+        new ClaudeLiveAdapter(executable, tracker).collect(liveAccount, { timeoutMs: 20 }),
       ).rejects.toMatchObject({
         data: { code: 'timeout', provider: 'claude', accountLabel: 'work' },
       });

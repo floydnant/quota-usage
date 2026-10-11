@@ -1,6 +1,6 @@
-import { createHash } from 'node:crypto';
-import { readdir, realpath, stat } from 'node:fs/promises';
+import { readdir, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
+import { accountStateAvailable, inspectAccountDirectory } from './account-state.js';
 import { ConfigStore, DEFAULT_CONFIG } from './config.js';
 import { UsageError } from './errors.js';
 import { accountOrder } from './selectors.js';
@@ -16,13 +16,35 @@ export interface AccountInventory {
   errors: UsageErrorData[];
 }
 
+export async function existingAccounts(accounts: AccountConfig[]): Promise<AccountInventory> {
+  const checks = await Promise.allSettled(accounts.map(accountStateAvailable));
+  const available: AccountConfig[] = [];
+  const errors: UsageErrorData[] = [];
+  checks.forEach((check, index) => {
+    const account = accounts[index] as AccountConfig;
+    if (check.status === 'fulfilled') {
+      if (check.value) available.push(account);
+    } else {
+      errors.push(
+        new UsageError(
+          'invalid_configuration',
+          `Cannot inspect subscription directory for ${account.provider}:${account.label}`,
+          { provider: account.provider, accountLabel: account.label },
+        ).data,
+      );
+    }
+  });
+  return { accounts: available.sort(accountOrder), errors };
+}
+
 /** Inspect directory names and metadata only; vendor CLIs determine authentication. */
 export async function discoverAccounts(
   registered: AccountConfig[],
   home: string,
+  discover = true,
 ): Promise<AccountInventory> {
-  const accounts = [...registered];
-  const errors: UsageErrorData[] = [];
+  const { accounts, errors } = await existingAccounts(registered);
+  if (!discover) return { accounts, errors };
   const labels = new Set(registered.map((account) => `${account.provider}:${account.label}`));
   const paths = new Set(
     await Promise.all(
@@ -67,30 +89,23 @@ export async function discoverAccounts(
     const claudeDefault = provider === 'claude' && match[2] === undefined;
     try {
       const requested = join(home, entry.name);
-      const info = await stat(requested);
-      if (!info.isDirectory()) continue;
-      const stateDir = await realpath(requested);
+      const directory = await inspectAccountDirectory(requested, claudeDefault);
+      if (!directory) continue;
+      const { stateDir, discoveryKey } = directory;
       if (paths.has(`${provider}:${stateDir}`)) continue;
-      // A retargeted symlink or replaced directory must not inherit another account's cache.
-      const discoveryKey = createHash('sha256')
-        .update(
-          `${stateDir}\0${info.dev}\0${info.ino}\0${info.birthtimeMs}${claudeDefault ? '\0default' : ''}`,
-        )
-        .digest('hex');
       accounts.push({
         provider,
         label,
         stateDir,
         ownership: 'external',
         discoveryKey,
+        discoveryPath: requested,
         directoryName: entry.name,
         ...(claudeDefault ? { claudeDefault: true } : {}),
       });
       labels.add(key);
       paths.add(`${provider}:${stateDir}`);
-    } catch (error) {
-      // Broken links and concurrent removals are no longer available directories.
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+    } catch {
       errors.push(
         new UsageError(
           'invalid_configuration',

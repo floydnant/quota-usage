@@ -54,6 +54,10 @@ invariants in [`AGENTS.md`](AGENTS.md) when designing any item.
 
 ## Completed account inventory
 
+- [x] Keep registered and discovered inventory tied to existing folders, guard
+      launches/retries against deletion, and discard removed entries instead of
+      restoring them from caches or stale in-flight results.
+
 - [x] Infer subscriptions from immediate `~/.codex-<label>` and `~/.claude-<label>`
       directories, plus the bare defaults, while retaining arbitrary
       explicit registrations.

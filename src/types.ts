@@ -77,6 +77,8 @@ export interface AccountConfig {
   directoryName?: string;
   /** Runtime-only discovery marker; never written to registration YAML. */
   discoveryKey?: string;
+  /** Runtime-only discovered entry path, including a directory symlink. */
+  discoveryPath?: string;
   claudeDefault?: boolean;
   ownershipMarker?: string;
   identityHash?: string;

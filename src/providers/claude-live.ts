@@ -1,4 +1,5 @@
 import { homedir } from 'node:os';
+import { assertAccountStateAvailable } from '../account-state.js';
 import { UsageError } from '../errors.js';
 import { compareVersions, parseVersion, vendorEnvironment } from '../executable.js';
 import { ProcessTracker, runProcess, type RunResult } from '../processes.js';
@@ -334,6 +335,7 @@ export class ClaudeLiveAdapter implements ProviderAdapter {
   }
 
   async collect(account: AccountConfig, options: CollectionOptions): Promise<AccountResult> {
+    await assertAccountStateAvailable(account);
     const version = await this.version();
     options.verbose?.(`claude:${account.label}: version ${version}`);
     const env = vendorEnvironment('claude', account.stateDir, process.env, {
@@ -353,6 +355,7 @@ export class ClaudeLiveAdapter implements ProviderAdapter {
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       options.verbose?.(`claude:${account.label}: noninteractive usage attempt ${attempt}`);
       try {
+        await assertAccountStateAvailable(account);
         const result = await runProcess(this.executable, args, {
           env,
           cwd: homedir(),

@@ -132,6 +132,10 @@ isolate the child process home and use cached/list commands or fake executables.
 Cover matching names, directory additions/removals, explicit-registration precedence,
 symlink deduplication, cache isolation when a directory changes, and logged-out rows
 beside successful results. Never infer login by opening credential files.
+`test/account-state.test.ts` covers missing registrations, cache resurrection,
+deletion during version checks/retries or queued collection, and removed/retargeted
+aliases. Fake vendors deliberately recreate absent state if launched; verify they
+are skipped and successful sibling accounts remain visible.
 
 Checkout-update changes are covered by `test/auto-update.test.ts`. Use temporary
 local Git remotes and injected fake npm builds; never fetch, merge, or rebuild the
