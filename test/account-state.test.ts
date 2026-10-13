@@ -1,5 +1,4 @@
 import {
-  chmod,
   mkdir,
   mkdtemp,
   readFile,
@@ -22,6 +21,7 @@ import { appPaths } from '../src/paths.js';
 import { ProcessTracker } from '../src/processes.js';
 import { ClaudeLiveAdapter } from '../src/providers/claude-live.js';
 import { CodexAdapter } from '../src/providers/codex.js';
+import { writeFakeExecutable } from './fake-executable.js';
 import type { AccountConfig, AccountResult, Provider } from '../src/types.js';
 
 const homes: string[] = [];
@@ -45,7 +45,7 @@ const fixture = (provider: Provider, label: string): AccountResult => ({
 
 async function fakeVendor(home: string, provider: Provider, body: string) {
   const executable = join(home, `fake-${provider}`);
-  await writeFile(
+  return writeFakeExecutable(
     executable,
     `#!/usr/bin/env node
 const fs = require('node:fs');
@@ -56,8 +56,6 @@ const version = ${JSON.stringify(provider === 'codex' ? 'codex-cli 0.150.1' : '2
 ${body}
 `,
   );
-  await chmod(executable, 0o700);
-  return executable;
 }
 
 describe('account directory state', () => {
@@ -102,7 +100,7 @@ fs.mkdirSync(stateDir, { recursive: true });
     await mkdir(join(home, '.codex-work'));
     await mkdir(join(home, 'existing'));
     await writeFile(join(home, 'file'), 'not a directory');
-    await symlink(join(home, 'missing'), join(home, 'broken'));
+    await symlink(join(home, 'missing'), join(home, 'broken'), 'junction');
     const accounts: AccountConfig[] = ['missing', 'file', 'file/child', 'broken', 'existing'].map(
       (name, index) => ({
         provider: 'codex',
@@ -125,7 +123,7 @@ fs.mkdirSync(stateDir, { recursive: true });
 
   it('reports inspection failures safely while preserving other accounts', async () => {
     const home = await temporaryHome();
-    await symlink(join(home, 'loop'), join(home, 'loop'));
+    await symlink(join(home, 'loop'), join(home, 'loop'), 'junction');
     const bad: AccountConfig = {
       provider: 'claude',
       label: 'bad',
@@ -146,15 +144,15 @@ fs.mkdirSync(stateDir, { recursive: true });
     const alias = join(home, '.claude-work');
     await mkdir(target);
     await mkdir(join(home, 'other'));
-    await symlink(target, alias);
+    await symlink(target, alias, 'junction');
     const account = (await discoverAccounts([], home)).accounts[0] as AccountConfig;
     expect(await accountStateAvailable(account)).toBe(true);
     await rm(alias);
     expect(await accountStateAvailable(account)).toBe(false);
-    await symlink(join(home, 'other'), alias);
+    await symlink(join(home, 'other'), alias, 'junction');
     expect(await accountStateAvailable(account)).toBe(false);
     await rm(alias);
-    await symlink(target, alias);
+    await symlink(target, alias, 'junction');
     await rename(target, join(home, 'old'));
     await mkdir(target);
     expect(await accountStateAvailable(account)).toBe(false);
