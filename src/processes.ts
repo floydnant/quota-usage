@@ -1,16 +1,36 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import type { ChildProcess, ChildProcessWithoutNullStreams } from 'node:child_process';
 import { once } from 'node:events';
 import { UsageError } from './errors.js';
+import {
+  KILL_EXIT_GRACE_MS,
+  killOwnedTree,
+  releaseChild,
+  settlesWithin,
+  spawnExecutable,
+} from './platform.js';
 
 export interface OwnedProcess {
   pid?: number | undefined;
-  kill(signal?: NodeJS.Signals): void;
+  /** May return a promise that settles when the kill operation has finished. */
+  kill(signal?: NodeJS.Signals): boolean | Promise<unknown> | undefined;
   exited?: Promise<unknown>;
+  /**
+   * Called by cleanup paths that stopped waiting for the child to exit: it
+   * destroys any stdio pipes still open and unrefs the child, so a surviving
+   * grandchild cannot keep the CLI event loop alive.
+   */
+  release?: () => void;
 }
+
+const settled = (value: unknown): Promise<void> =>
+  Promise.resolve(value).then(
+    () => undefined,
+    () => undefined,
+  );
 
 export class ProcessTracker {
   private readonly owned = new Set<OwnedProcess>();
-  private cleaning = false;
+  private cleaning: Promise<void> | undefined;
 
   track<T extends OwnedProcess>(process: T): T {
     this.owned.add(process);
@@ -29,33 +49,39 @@ export class ProcessTracker {
     return this.owned.size;
   }
 
-  async cleanup(graceMs = 500): Promise<void> {
-    if (this.cleaning) return;
-    this.cleaning = true;
-    try {
-      const processes = [...this.owned];
-      for (const process of processes) process.kill('SIGTERM');
-      await Promise.all(
-        processes.map(async (process) => {
-          if (!process.exited) return;
-          await Promise.race([
-            process.exited.catch(() => undefined),
-            new Promise((resolve) => setTimeout(resolve, graceMs)),
-          ]);
-        }),
-      );
-      for (const process of processes) {
-        if (this.owned.has(process)) process.kill('SIGKILL');
-      }
-      await Promise.all(
-        processes.flatMap((process) =>
-          process.exited ? [process.exited.catch(() => undefined)] : [],
-        ),
-      );
-      for (const process of processes) this.owned.delete(process);
-    } finally {
-      this.cleaning = false;
+  /** Concurrent callers (a signal handler and normal shutdown) share one in-flight run. */
+  cleanup(graceMs = 500): Promise<void> {
+    this.cleaning ??= this.runCleanup(graceMs).finally(() => {
+      this.cleaning = undefined;
+    });
+    return this.cleaning;
+  }
+
+  private async runCleanup(graceMs: number): Promise<void> {
+    const processes = [...this.owned];
+    // Windows tree kills run as their own taskkill processes; drain them too.
+    const kills = processes.map((process) => settled(process.kill('SIGTERM')));
+    await Promise.all(
+      processes.map(async (process) => {
+        if (!process.exited) return;
+        await settlesWithin(process.exited, graceMs);
+      }),
+    );
+    for (const process of processes) {
+      if (this.owned.has(process)) kills.push(settled(process.kill('SIGKILL')));
     }
+    // Tree kills are bounded by the platform layer. A child that still does not
+    // exit after the forced kill gets one more grace period, then is released:
+    // its stdio pipes are destroyed and it is unref'd so it cannot hold the CLI
+    // event loop open after the final exit code is set.
+    await Promise.all(kills);
+    await Promise.all(
+      processes.map(async (process) => {
+        if (!process.exited) return;
+        if (!(await settlesWithin(process.exited, KILL_EXIT_GRACE_MS))) process.release?.();
+      }),
+    );
+    for (const process of processes) this.owned.delete(process);
   }
 
   installSignalHandlers(onSignal?: (signal: NodeJS.Signals) => void): () => void {
@@ -92,19 +118,17 @@ export async function runProcess(
     maxOutput?: number;
   },
 ): Promise<RunResult> {
-  const child = spawn(executable, args, {
+  const child = spawnExecutable(executable, args, {
     env: options.env,
     cwd: options.cwd,
-    shell: false,
     stdio: ['pipe', 'pipe', 'pipe'],
-  });
+  }) as ChildProcessWithoutNullStreams;
   const exited = once(child, 'exit');
   options.tracker.track({
     pid: child.pid,
-    kill: (signal) => {
-      child.kill(signal);
-    },
+    kill: (signal) => killOwnedTree(child, signal),
     exited,
+    release: () => releaseChild(child),
   });
   let stdout = '';
   let stderr = '';
@@ -118,9 +142,10 @@ export async function runProcess(
   if (options.input !== undefined) child.stdin.end(options.input);
   else child.stdin.end();
   let timeoutHandle: NodeJS.Timeout | undefined;
+  let timeoutKill: Promise<void> | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeoutHandle = setTimeout(() => {
-      child.kill('SIGTERM');
+      timeoutKill = killOwnedTree(child, 'SIGTERM');
       reject(
         new UsageError('timeout', `Process timed out after ${options.timeoutMs}ms`, {
           retryable: true,
@@ -135,8 +160,9 @@ export async function runProcess(
     ];
     return { stdout, stderr, code: code ?? 1 };
   } catch (error) {
-    child.kill('SIGKILL');
-    await exited.catch(() => undefined);
+    const forced = killOwnedTree(child, 'SIGKILL');
+    await Promise.all([timeoutKill, forced]);
+    if (!(await settlesWithin(exited, KILL_EXIT_GRACE_MS))) releaseChild(child);
     throw error;
   } finally {
     clearTimeout(timeoutHandle);
@@ -146,9 +172,8 @@ export async function runProcess(
 export function childOwned(child: ChildProcess): OwnedProcess {
   return {
     ...(child.pid === undefined ? {} : { pid: child.pid }),
-    kill: (signal) => {
-      child.kill(signal);
-    },
+    kill: (signal) => killOwnedTree(child, signal),
     exited: once(child, 'exit'),
+    release: () => releaseChild(child),
   };
 }

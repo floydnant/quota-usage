@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -6,6 +6,7 @@ import { ConfigStore, DEFAULT_CONFIG } from '../src/config.js';
 import { doctor, renderDoctor } from '../src/doctor.js';
 import { appPaths } from '../src/paths.js';
 import { uninstall, uninstallPreview } from '../src/uninstall.js';
+import { writeFakeExecutable } from './fake-executable.js';
 
 describe('doctor and uninstall', () => {
   it('reports schema, permissions, executable versions, and app-server checks without quota calls', async () => {
@@ -15,13 +16,14 @@ describe('doctor and uninstall', () => {
     await mkdir(bin);
     const codex = join(bin, 'codex');
     const claude = join(bin, 'claude');
-    await writeFile(
+    await writeFakeExecutable(
       codex,
-      `#!/bin/sh\nif [ "$1" = "--version" ]; then echo 'codex-cli 0.150.1'; else echo '--stdio'; fi\n`,
+      `#!/usr/bin/env node\nconsole.log(process.argv[2] === '--version' ? 'codex-cli 0.150.1' : '--stdio');\n`,
     );
-    await writeFile(claude, `#!/bin/sh\necho '2.1.238 (Claude Code)'\n`);
-    await chmod(codex, 0o700);
-    await chmod(claude, 0o700);
+    await writeFakeExecutable(
+      claude,
+      `#!/usr/bin/env node\nconsole.log('2.1.238 (Claude Code)');\n`,
+    );
     await store.write(
       {
         ...DEFAULT_CONFIG,

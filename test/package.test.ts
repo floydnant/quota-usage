@@ -1,11 +1,29 @@
-import { execFile } from 'node:child_process';
 import { mkdtemp, stat } from 'node:fs/promises';
-import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { findCommand, spawnExecutable } from '../src/platform.js';
 
-const execute = promisify(execFile);
+/** execFile cannot start Windows `.cmd` shims such as npm.cmd or the installed usage.cmd. */
+function execute(
+  command: string,
+  args: string[],
+  options: { cwd?: string; timeout: number; maxBuffer?: number },
+): Promise<{ stdout: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawnExecutable(findCommand(command), args, {
+      cwd: options.cwd,
+      timeout: options.timeout,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    child.stdout?.on('data', (chunk: Buffer) => (stdout += chunk.toString()));
+    child.once('error', reject);
+    child.once('close', (code) =>
+      code === 0 ? resolve({ stdout }) : reject(new Error(`${command} exited with ${code}`)),
+    );
+  });
+}
 
 describe('packed npm artifact', () => {
   it('contains only intended files and executes its installed usage binary', async () => {
@@ -31,7 +49,7 @@ describe('packed npm artifact', () => {
       files.every((file) => /^(?:dist\/|README\.md$|LICENSE$|package\.json$)/.test(file)),
     ).toBe(true);
     const builtCli = await stat(join(process.cwd(), 'dist', 'cli.js'));
-    expect(builtCli.mode & 0o111).not.toBe(0);
+    if (process.platform !== 'win32') expect(builtCli.mode & 0o111).not.toBe(0);
 
     const prefix = join(root, 'install');
     await execute(
@@ -46,7 +64,8 @@ describe('packed npm artifact', () => {
       ],
       { timeout: 30_000, maxBuffer: 2 * 1024 * 1024 },
     );
-    const help = await execute(join(prefix, 'node_modules', '.bin', 'usage'), ['--help'], {
+    const bin = join(prefix, 'node_modules', '.bin', 'usage');
+    const help = await execute(process.platform === 'win32' ? `${bin}.cmd` : bin, ['--help'], {
       timeout: 5_000,
     });
     expect(help.stdout).toContain('Report Codex and Claude Code subscription quota usage');

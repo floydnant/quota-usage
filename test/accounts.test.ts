@@ -1,13 +1,4 @@
-import {
-  chmod,
-  lstat,
-  mkdir,
-  mkdtemp,
-  readFile,
-  realpath,
-  symlink,
-  writeFile,
-} from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -21,6 +12,7 @@ import {
 import { ConfigStore, DEFAULT_CONFIG } from '../src/config.js';
 import { appPaths } from '../src/paths.js';
 import type { AccountConfig, UsageConfig } from '../src/types.js';
+import { writeFakeExecutable } from './fake-executable.js';
 
 async function setup(): Promise<ConfigStore> {
   const home = await mkdtemp(join(tmpdir(), 'accounts-'));
@@ -57,7 +49,8 @@ describe('Claude collector configuration', () => {
     expect(await statusLineCommand(join(stateDir, 'settings.json'))).toBe(
       installed.claudeCollector?.wrapperCommand,
     );
-    expect((await lstat(collectorPaths(store, 'work').helper)).mode & 0o777).toBe(0o700);
+    if (process.platform !== 'win32')
+      expect((await lstat(collectorPaths(store, 'work').helper)).mode & 0o777).toBe(0o700);
     expect(await restoreClaudeCollector(installed)).toEqual({ restored: true });
     expect(await statusLineCommand(join(stateDir, 'settings.json'))).toBe('/bin/cat');
   });
@@ -93,16 +86,15 @@ describe('account registration', () => {
     const stateDir = join(store.paths.dataDir, 'codex-real');
     const linkedState = join(store.paths.dataDir, 'codex-link');
     await mkdir(stateDir, { recursive: true });
-    await symlink(stateDir, linkedState);
+    await symlink(stateDir, linkedState, 'junction');
     const fake = join(store.paths.dataDir, 'fake-codex');
-    await writeFile(
+    await writeFakeExecutable(
       fake,
       `#!/usr/bin/env node
 if(process.argv.includes('--version')){console.log('codex-cli 0.150.1');process.exit(0)}
 const r=require('node:readline').createInterface({input:process.stdin});
 r.on('line',line=>{const m=JSON.parse(line);if(m.method==='initialize')console.log(JSON.stringify({id:m.id,result:{}}));if(m.method==='account/read')console.log(JSON.stringify({id:m.id,result:{account:{type:'chatgpt',email:'user@example.com',planType:'plus'}}}))});`,
     );
-    await chmod(fake, 0o700);
     await store.write(
       {
         ...DEFAULT_CONFIG,
@@ -124,15 +116,15 @@ r.on('line',line=>{const m=JSON.parse(line);if(m.method==='initialize')console.l
     const stateDir = join(store.paths.dataDir, 'claude-state');
     await mkdir(stateDir, { recursive: true });
     const fake = join(store.paths.dataDir, 'fake-claude');
-    await writeFile(
+    await writeFakeExecutable(
       fake,
-      `#!/bin/sh
-if [ "$1" = "--version" ]; then echo '2.1.238 (Claude Code)'; exit 0; fi
-if [ "$1" = "auth" ] && [ "$2" = "status" ]; then echo '{"loggedIn":true}'; exit 0; fi
-exit 1
+      `#!/usr/bin/env node
+const [command, subcommand] = process.argv.slice(2);
+if (command === '--version') { console.log('2.1.238 (Claude Code)'); process.exit(0); }
+if (command === 'auth' && subcommand === 'status') { console.log('{"loggedIn":true}'); process.exit(0); }
+process.exit(1);
 `,
     );
-    await chmod(fake, 0o700);
     await store.write(
       {
         ...DEFAULT_CONFIG,
@@ -188,7 +180,7 @@ describe('removal and purge guards', () => {
     const target = join(store.paths.managedRoot, 'codex', 'x');
     await mkdir(real, { recursive: true });
     await mkdir(join(store.paths.managedRoot, 'codex'), { recursive: true });
-    await symlink(real, target);
+    await symlink(real, target, 'junction');
     const managed: AccountConfig = {
       ...external,
       stateDir: target,
@@ -209,8 +201,7 @@ describe('removal and purge guards', () => {
       mode: 0o600,
     });
     const fake = join(store.paths.dataDir, 'codex');
-    await writeFile(fake, '#!/bin/sh\nexit 0\n');
-    await chmod(fake, 0o700);
+    await writeFakeExecutable(fake, '#!/usr/bin/env node\n');
     const account: AccountConfig = {
       provider: 'codex',
       label: 'personal',

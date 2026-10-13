@@ -9,7 +9,8 @@
     "node": ">=22"
   },
   "os": [
-    "darwin"
+    "darwin",
+    "win32"
   ],
   "bin": {
     "usage": "./dist/cli.js"

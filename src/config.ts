@@ -1,8 +1,9 @@
 import { constants } from 'node:fs';
 import { access, chmod, copyFile, open, readFile, rename, stat } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Document, isMap, parseDocument } from 'yaml';
+import { isWindows } from './platform.js';
 import { UsageError } from './errors.js';
 import { appPaths, defaultStateDir, ensurePrivateDir, type AppPaths } from './paths.js';
 import { parseDuration } from './duration.js';
@@ -105,7 +106,7 @@ export function validateConfig(value: unknown): UsageConfig {
     const label = stringAt(item, 'label', path);
     validateLabel(label);
     const stateDir = stringAt(item, 'stateDir', path);
-    if (!stateDir.startsWith('/')) {
+    if (!isAbsolute(stateDir)) {
       throw new UsageError('invalid_configuration', `${path}.stateDir must be absolute`);
     }
     const ownership = stringAt(item, 'ownership', path);
@@ -272,6 +273,8 @@ export class ConfigStore {
 
   async permissions(): Promise<{ path: string; mode: number; expected: number }[]> {
     const checks: { path: string; mode: number; expected: number }[] = [];
+    // Windows reports synthetic POSIX modes; the profile directory's ACLs protect these files.
+    if (isWindows) return checks;
     for (const [path, expected] of [
       [this.paths.configDir, 0o700],
       [this.paths.configFile, 0o600],

@@ -31,8 +31,11 @@ describe('configuration', () => {
     expect(await config.load()).toMatchObject({ defaults: { codexTimeout: '1m' } });
     expect(await readFile(config.paths.configFile, 'utf8')).toContain('# keep me');
     expect(await readFile(config.paths.backupFile, 'utf8')).toContain('# keep me');
-    expect((await stat(config.paths.configFile)).mode & 0o777).toBe(0o600);
-    expect((await stat(config.paths.configDir)).mode & 0o777).toBe(0o700);
+    // Windows reports synthetic modes; profile ACLs protect the files instead.
+    if (process.platform !== 'win32') {
+      expect((await stat(config.paths.configFile)).mode & 0o777).toBe(0o600);
+      expect((await stat(config.paths.configDir)).mode & 0o777).toBe(0o700);
+    }
   });
 
   it('reports unknown YAML paths', () => {

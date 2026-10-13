@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
 import { chmod, mkdir, open, readFile, rename, rmdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
@@ -121,14 +122,33 @@ async function writeNewest(path: string, value: Record<string, unknown>): Promis
   }
 }
 
+// This file is copied alone into the helper directory, so it cannot share platform.ts.
+// Claude Code runs Windows status lines through Git Bash, or PowerShell without it.
+function statusLineShell(command: string): [string, string[]] {
+  if (process.platform !== 'win32') return ['/bin/sh', ['-c', command]];
+  const bash = [
+    process.env.CLAUDE_CODE_GIT_BASH_PATH,
+    join(process.env.ProgramFiles ?? 'C:\\Program Files', 'Git', 'bin', 'bash.exe'),
+  ].find((path) => path && existsSync(path));
+  return bash
+    ? [bash, ['-c', command]]
+    : ['powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command]];
+}
+
 async function chain(command: string, input: string): Promise<void> {
-  const child = spawn('/bin/sh', ['-c', command], {
+  const [shell, shellArgs] = statusLineShell(command);
+  const child = spawn(shell, shellArgs, {
     shell: false,
+    windowsHide: true,
     stdio: ['pipe', 'pipe', 'ignore'],
   });
+  child.once('error', () => undefined);
   child.stdin.end(input);
   child.stdout.pipe(process.stdout);
-  await new Promise<void>((resolve) => child.once('exit', () => resolve()));
+  await new Promise<void>((resolve) => {
+    child.once('exit', () => resolve());
+    child.once('error', () => resolve());
+  });
 }
 
 async function main(): Promise<void> {
