@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { once } from 'node:events';
 import { createInterface } from 'node:readline';
+import { assertAccountStateAvailable } from '../account-state.js';
 import { UsageError } from '../errors.js';
 import { parseVersion, compareVersions, vendorEnvironment } from '../executable.js';
 import {
@@ -321,6 +322,7 @@ export class CodexAdapter implements ProviderAdapter {
     timeoutMs: number,
     includeLimits: boolean,
   ): Promise<{ identity: AccountIdentity; limits?: unknown }> {
+    await assertAccountStateAvailable(account);
     const session = new JsonRpcSession(this.executable, account.stateDir, this.tracker);
     let timer: NodeJS.Timeout | undefined;
     try {
@@ -388,6 +390,7 @@ export class CodexAdapter implements ProviderAdapter {
   }
 
   async collect(account: AccountConfig, options: CollectionOptions): Promise<AccountResult> {
+    await assertAccountStateAvailable(account);
     await this.version();
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {

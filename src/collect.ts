@@ -1,5 +1,6 @@
 import { readCache, writeCache } from './cache.js';
-import { discoverAccounts } from './discovery.js';
+import { assertAccountStateAvailable } from './account-state.js';
+import { discoverAccounts, existingAccounts } from './discovery.js';
 import { parseDuration } from './duration.js';
 import { asUsageError, UsageError } from './errors.js';
 import { resolveExecutable } from './executable.js';
@@ -70,25 +71,43 @@ export async function collectUsage(request: CollectRequest): Promise<CollectionS
   const tracker = request.tracker ?? new ProcessTracker();
   const now = request.now ?? new Date();
   const staleMs = parseDuration(request.config.defaults.staleAfter);
-  const inventory =
-    request.discover === false
-      ? { accounts: request.config.accounts, errors: [] }
-      : await discoverAccounts(request.config.accounts, paths.homeDir);
+  const inventory = await discoverAccounts(
+    request.config.accounts,
+    paths.homeDir,
+    request.discover,
+  );
   const accounts = selectAccounts(inventory.accounts, request.selectors);
   const errors: UsageErrorData[] = [...inventory.errors];
-  const finish = (results: AccountResult[]): CollectionSummary =>
-    summarize(
-      results.map((result) => {
-        const account = accounts.find(
-          (item) => item.provider === result.provider && item.label === result.label,
-        );
-        return account ? { ...result, directoryName: accountDirectoryName(account) } : result;
-      }),
-      errors,
+  const finish = async (results: AccountResult[]): Promise<CollectionSummary> => {
+    const current = await existingAccounts(accounts);
+    const active = new Set(
+      current.accounts.map((account) => `${account.provider}:${account.label}`),
     );
+    return summarize(
+      results
+        .filter((result) => active.has(`${result.provider}:${result.label}`))
+        .map((result) => {
+          const account = accounts.find(
+            (item) => item.provider === result.provider && item.label === result.label,
+          );
+          return account ? { ...result, directoryName: accountDirectoryName(account) } : result;
+        }),
+      [
+        ...errors.filter(
+          (error) =>
+            error.provider === undefined ||
+            error.accountLabel === undefined ||
+            active.has(`${error.provider}:${error.accountLabel}`) ||
+            inventory.errors.includes(error),
+        ),
+        ...current.errors,
+      ],
+    );
+  };
 
   const collectCached = async (account: AccountConfig): Promise<AccountResult> => {
     try {
+      await assertAccountStateAvailable(account);
       const cached = await readCache(
         paths,
         account.provider,
@@ -171,7 +190,9 @@ export async function collectUsage(request: CollectRequest): Promise<CollectionS
     task: () => Promise<AccountResult>,
   ): Promise<AccountResult> {
     try {
+      await assertAccountStateAvailable(account);
       const result = await task();
+      await assertAccountStateAvailable(account);
       await writeCache(paths, result, account.discoveryKey);
       return result;
     } catch (error) {
@@ -186,6 +207,7 @@ export async function collectUsage(request: CollectRequest): Promise<CollectionS
       liveError.accountLabel = account.label;
       errors.push(liveError);
       try {
+        await assertAccountStateAvailable(account);
         const cached = await readCache(
           paths,
           account.provider,

@@ -85,6 +85,14 @@ updates the next inventory automatically. `accounts list` is a local inventory;
 login and quota availability are checked during live collection. `--cached` scans
 and reads caches only, so it cannot check current login state.
 
+Explicit registrations are also shown and collected only while their state
+directory exists, including with `--no-discover`. Deleting a directory leaves its
+registration YAML and old quota cache untouched, but neither can bring the account
+back into the dashboard or cause a vendor check to recreate its folder. Restoring
+the directory makes the registration eligible again. Collection rechecks directories
+before provider launches/retries and before returning results; deleted or replaced
+discovered entries are dropped from that snapshot.
+
 Suffixes use the same lowercase label rules below. Discovery is nonrecursive and
 matches both the default and hyphenated names. Defaults use the internal selector label `default`;
 if a separate suffixed directory also uses that label, it receives an available

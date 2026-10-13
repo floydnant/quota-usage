@@ -124,10 +124,66 @@ Extra usage balance remaining: $12.50`,
     ).toBe('2026-08-29T00:00:00.000Z');
   });
 
+  it('parses the comma-separated reset dates printed by Claude Code 2.1.284', () => {
+    const result = parseClaudeUsageText(
+      `You are currently using your subscription to power your Claude Code usage
+
+Current session: 2% used · resets Sep 29, 2:50am (Europe/Berlin)
+Current week (all models): 47% used · resets Oct 3, 2am (Europe/Berlin)`,
+      account,
+      new Date('2026-09-28T20:00:00Z'),
+    );
+    expect(result.windows).toMatchObject([
+      { id: 'five_hour', resetAt: '2026-09-29T00:50:00.000Z' },
+      { id: 'seven_day', resetAt: '2026-10-03T00:00:00.000Z' },
+    ]);
+  });
+
+  it('rejects explicit provider errors shown alongside a cost summary', () => {
+    const loadFailure = ['provider_failure', 'Claude could not load usage data', true] as const;
+    const networkFailure = ['provider_failure', 'Claude reported a network error', true] as const;
+    const cases = [
+      ['Failed to load usage data\nTotal cost: $0.0000', ...loadFailure],
+      ['usage endpoint is rate limited\nTotal cost: $0.0000', ...loadFailure],
+      ['Network error\nTotal cost: $0.0000', ...networkFailure],
+      ['Network error: unable to connect\nTotal cost: $0.0000', ...networkFailure],
+      [
+        'Update available: new version is available\nTotal cost: $0.0000',
+        'provider_failure',
+        'Claude displayed an upgrade notice',
+        false,
+      ],
+      [
+        'Please log in to Claude Code\nTotal cost: $0.0000',
+        'logged_out_account',
+        'Claude account work is logged out',
+        false,
+      ],
+    ] as const;
+    for (const [text, code, message, retryable] of cases) {
+      expect(() => parseClaudeUsageText(text, account)).toThrow(
+        expect.objectContaining({
+          data: { code, message, retryable, provider: 'claude', accountLabel: 'work' },
+        }),
+      );
+    }
+  });
+
   it('rejects provider errors, unrelated percentages, and malformed envelopes', () => {
     expect(() => parseClaudeUsageText('Please log in to Claude Code', account)).toThrow(
       'logged out',
     );
+    // A logged-out Claude Code 2.1.284 answers /usage with the local cost summary only.
+    expect(() =>
+      parseClaudeUsageText(
+        `Total cost:            $0.0000
+Total duration (API):  0s
+Total duration (wall): 1s
+Total code changes:    0 lines added, 0 lines removed
+Usage:                 0 input, 0 output, 0 cache read, 0 cache write`,
+        account,
+      ),
+    ).toThrow('logged out');
     expect(() => parseClaudeUsageText('Failed to load usage data', account)).toThrow(
       'could not load',
     );
@@ -166,6 +222,7 @@ Extra usage balance remaining: $12.50`,
   it('runs print mode for default and isolated accounts with scrubbed credentials', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'claude-print-'));
     const executable = await fakeClaude(directory);
+    const liveAccount = { ...account, stateDir: directory };
     const log = join(directory, 'calls.jsonl');
     const priorLog = process.env.FAKE_LOG;
     const priorApiKey = process.env.ANTHROPIC_API_KEY;
@@ -177,10 +234,10 @@ Extra usage balance remaining: $12.50`,
       const tracker = new ProcessTracker();
       const adapter = new ClaudeLiveAdapter(executable, tracker);
       const defaultResult = await adapter.collect(
-        { ...account, label: 'default', claudeDefault: true },
+        { ...liveAccount, label: 'default', claudeDefault: true },
         { timeoutMs: 1_000 },
       );
-      const isolatedResult = await adapter.collect(account, { timeoutMs: 1_000 });
+      const isolatedResult = await adapter.collect(liveAccount, { timeoutMs: 1_000 });
       expect(defaultResult).toMatchObject({ source: 'claude-cli' });
       expect(defaultResult.windows[0]).toMatchObject({ id: 'five_hour' });
       expect(isolatedResult).toMatchObject({ source: 'claude-cli' });
@@ -201,7 +258,7 @@ Extra usage balance remaining: $12.50`,
     expect(calls).toHaveLength(2);
     expect(calls[0]).toMatchObject({ configDir: null, apiKey: null, oauthToken: null });
     expect(calls[1]).toMatchObject({
-      configDir: account.stateDir,
+      configDir: liveAccount.stateDir,
       apiKey: null,
       oauthToken: null,
     });
@@ -220,13 +277,14 @@ Extra usage balance remaining: $12.50`,
   it('retries an incomplete response once and rejects unsupported versions', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'claude-retry-'));
     const executable = await fakeClaude(directory);
+    const liveAccount = { ...account, stateDir: directory };
     const retryFile = join(directory, 'retried');
     const priorRetry = process.env.FAKE_RETRY_FILE;
     process.env.FAKE_RETRY_FILE = retryFile;
     try {
       const messages: string[] = [];
       await expect(
-        new ClaudeLiveAdapter(executable, new ProcessTracker()).collect(account, {
+        new ClaudeLiveAdapter(executable, new ProcessTracker()).collect(liveAccount, {
           timeoutMs: 1_000,
           verbose: (message) => messages.push(message),
         }),
@@ -252,12 +310,13 @@ Extra usage balance remaining: $12.50`,
   it('times out with account context and leaves no tracked child', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'claude-timeout-'));
     const executable = await fakeClaude(directory);
+    const liveAccount = { ...account, stateDir: directory };
     const tracker = new ProcessTracker();
     const priorDelay = process.env.FAKE_DELAY_MS;
     process.env.FAKE_DELAY_MS = '1000';
     try {
       await expect(
-        new ClaudeLiveAdapter(executable, tracker).collect(account, { timeoutMs: 20 }),
+        new ClaudeLiveAdapter(executable, tracker).collect(liveAccount, { timeoutMs: 20 }),
       ).rejects.toMatchObject({
         data: { code: 'timeout', provider: 'claude', accountLabel: 'work' },
       });

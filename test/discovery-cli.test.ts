@@ -1,8 +1,11 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { writeCache } from '../src/cache.js';
+import { ConfigStore, DEFAULT_CONFIG } from '../src/config.js';
+import { appPaths } from '../src/paths.js';
 
 function run(home: string, args: string[]) {
   return new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
@@ -83,4 +86,41 @@ describe('discovery CLI without registration', () => {
     expect(disabled.code).toBe(0);
     expect(JSON.parse(disabled.stdout)).toMatchObject({ results: [], errors: [] });
   });
+});
+
+it('omits deleted registrations from list and JSON while retaining the user configuration', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'deleted-registration-cli-'));
+  try {
+    const store = new ConfigStore(appPaths(home));
+    const stateDir = join(home, '.claude-deleted');
+    await mkdir(stateDir);
+    await store.write({
+      ...DEFAULT_CONFIG,
+      defaults: { ...DEFAULT_CONFIG.defaults, claudeExecutable: '/must-not-run' },
+      accounts: [{ provider: 'claude', label: 'deleted', stateDir, ownership: 'external' }],
+    });
+    await writeCache(store.paths, {
+      provider: 'claude',
+      label: 'deleted',
+      source: 'fixture',
+      status: 'live',
+      collectedAt: new Date().toISOString(),
+      windows: [{ id: '5h', usedPercent: 10, remainingPercent: 90 }],
+    });
+    const before = await readFile(store.paths.configFile, 'utf8');
+    await rm(stateDir, { recursive: true });
+    for (const discoverArgs of [[], ['--no-discover']]) {
+      const listed = await run(home, [...discoverArgs, 'accounts', 'list']);
+      expect(listed.code).toBe(0);
+      expect(listed.stdout).not.toContain('.claude-deleted');
+      for (const modeArgs of [[], ['--cached']]) {
+        const collected = await run(home, [...discoverArgs, ...modeArgs, '--json']);
+        expect(collected.code).toBe(0);
+        expect(JSON.parse(collected.stdout)).toMatchObject({ results: [], errors: [] });
+      }
+    }
+    expect(await readFile(store.paths.configFile, 'utf8')).toBe(before);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
 });

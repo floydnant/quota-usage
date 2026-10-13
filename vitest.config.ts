@@ -12,6 +12,7 @@ export default defineConfig({
         'src/auto-update.ts',
         'src/update-checkout.ts',
         'src/config.ts',
+        'src/account-state.ts',
         'src/selectors.ts',
         'src/cache.ts',
         'src/processes.ts',

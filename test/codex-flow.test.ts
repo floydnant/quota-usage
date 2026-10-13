@@ -25,11 +25,11 @@ readline.on('line', line => {
   return writeFakeExecutable(path, script);
 }
 
-function account(): AccountConfig {
+async function account(): Promise<AccountConfig> {
   return {
     provider: 'codex',
     label: 'personal',
-    stateDir: '/tmp/fake-home',
+    stateDir: await mkdtemp(join(tmpdir(), 'codex-state-')),
     ownership: 'external',
     identityHash: identityHash('user@example.com'),
   };
@@ -39,7 +39,7 @@ describe('Codex JSON-RPC flow', () => {
   it('performs handshake, identity check, and rate-limit collection', async () => {
     const tracker = new ProcessTracker();
     const adapter = new CodexAdapter(await fakeCodex(), tracker);
-    const result = await adapter.collect(account(), {
+    const result = await adapter.collect(await account(), {
       timeoutMs: 2_000,
       now: new Date('2026-08-27T18:00:00Z'),
     });
@@ -58,7 +58,7 @@ describe('Codex JSON-RPC flow', () => {
     const adapter = new CodexAdapter(await fakeCodex(), tracker);
     await expect(
       adapter.readIdentity(
-        { ...account(), identityHash: undefined } as unknown as AccountConfig,
+        { ...(await account()), identityHash: undefined } as unknown as AccountConfig,
         2_000,
       ),
     ).resolves.toMatchObject({ email: 'user@example.com' });
@@ -67,7 +67,7 @@ describe('Codex JSON-RPC flow', () => {
   it('refuses identity mismatch without retrying', async () => {
     const tracker = new ProcessTracker();
     const adapter = new CodexAdapter(await fakeCodex('mismatch'), tracker);
-    await expect(adapter.collect(account(), { timeoutMs: 2_000 })).rejects.toMatchObject({
+    await expect(adapter.collect(await account(), { timeoutMs: 2_000 })).rejects.toMatchObject({
       data: { code: 'identity_mismatch' },
     });
     expect(tracker.size).toBe(0);
@@ -76,14 +76,16 @@ describe('Codex JSON-RPC flow', () => {
   it('classifies malformed protocol and timeout and cleans children', async () => {
     const malformedTracker = new ProcessTracker();
     await expect(
-      new CodexAdapter(await fakeCodex('malformed'), malformedTracker).collect(account(), {
+      new CodexAdapter(await fakeCodex('malformed'), malformedTracker).collect(await account(), {
         timeoutMs: 500,
       }),
     ).rejects.toMatchObject({ data: { code: 'parse_failure' } });
     expect(malformedTracker.size).toBe(0);
     const hangTracker = new ProcessTracker();
     await expect(
-      new CodexAdapter(await fakeCodex('hang'), hangTracker).collect(account(), { timeoutMs: 100 }),
+      new CodexAdapter(await fakeCodex('hang'), hangTracker).collect(await account(), {
+        timeoutMs: 100,
+      }),
     ).rejects.toMatchObject({ data: { code: 'timeout' } });
     expect(hangTracker.size).toBe(0);
   });

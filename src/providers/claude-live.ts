@@ -1,4 +1,5 @@
 import { homedir } from 'node:os';
+import { assertAccountStateAvailable } from '../account-state.js';
 import { UsageError } from '../errors.js';
 import { compareVersions, parseVersion, vendorEnvironment } from '../executable.js';
 import { ProcessTracker, runProcess, type RunResult } from '../processes.js';
@@ -65,7 +66,7 @@ function dateInZone(parts: LocalDateParts, timeZone: string): Date {
 
 function parseClaudeLocalReset(text: string, now: Date): Date | undefined {
   const match =
-    /reset(?:s|ting)?\s+(?:(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2})(?:,?\s+(\d{4}))?\s+(?:at\s+)?)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)(?:\s+\(([^)]+)\))?/i.exec(
+    /reset(?:s|ting)?\s+(?:(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2})(?:,?\s+(\d{4}))?,?\s+(?:at\s+)?)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)(?:\s+\(([^)]+)\))?/i.exec(
       text,
     );
   if (!match) return undefined;
@@ -198,6 +199,14 @@ function providerScreenError(
       accountLabel: account.label,
     });
   }
+  // Logged out, Claude Code 2.1.284 answers /usage with only the local cost summary.
+  // Explicit provider errors above take precedence over this fallback.
+  if (/^\s*Total cost:/m.test(text) && !/current (?:session|week)/i.test(text)) {
+    return new UsageError('logged_out_account', `Claude account ${account.label} is logged out`, {
+      provider: 'claude',
+      accountLabel: account.label,
+    });
+  }
   return null;
 }
 
@@ -326,6 +335,7 @@ export class ClaudeLiveAdapter implements ProviderAdapter {
   }
 
   async collect(account: AccountConfig, options: CollectionOptions): Promise<AccountResult> {
+    await assertAccountStateAvailable(account);
     const version = await this.version();
     options.verbose?.(`claude:${account.label}: version ${version}`);
     const env = vendorEnvironment('claude', account.stateDir, process.env, {
@@ -345,6 +355,7 @@ export class ClaudeLiveAdapter implements ProviderAdapter {
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       options.verbose?.(`claude:${account.label}: noninteractive usage attempt ${attempt}`);
       try {
+        await assertAccountStateAvailable(account);
         const result = await runProcess(this.executable, args, {
           env,
           cwd: homedir(),

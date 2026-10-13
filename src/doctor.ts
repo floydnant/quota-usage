@@ -2,6 +2,7 @@ import { access, readFile, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { join } from 'node:path';
 import { cachePath, readCache } from './cache.js';
+import { accountStateAvailable } from './account-state.js';
 import { discoverAccounts, loadAccountConfig } from './discovery.js';
 import { ConfigStore } from './config.js';
 import { parseDuration } from './duration.js';
@@ -31,17 +32,19 @@ export async function doctor(
   let config;
   try {
     config = await loadAccountConfig(store);
-    if (options.discover !== false) {
-      const inventory = await discoverAccounts(config.accounts, store.paths.homeDir);
-      config = { ...config, accounts: inventory.accounts };
-      checks.push(
-        ...inventory.errors.map((error) => ({
-          name: 'account discovery',
-          ok: false,
-          detail: error.message,
-        })),
-      );
-    }
+    const inventory = await discoverAccounts(
+      config.accounts,
+      store.paths.homeDir,
+      options.discover,
+    );
+    config = { ...config, accounts: inventory.accounts };
+    checks.push(
+      ...inventory.errors.map((error) => ({
+        name: 'account discovery',
+        ok: false,
+        detail: error.message,
+      })),
+    );
     checks.push({ name: 'configuration', ok: true, detail: 'valid schema version 1' });
   } catch (error) {
     checks.push({
@@ -108,6 +111,16 @@ export async function doctor(
   }
   const now = new Date();
   for (const account of config.accounts) {
+    try {
+      if (!(await accountStateAvailable(account))) continue;
+    } catch {
+      checks.push({
+        name: `${account.provider}:${account.label} canonical path`,
+        ok: false,
+        detail: 'Cannot inspect subscription directory',
+      });
+      continue;
+    }
     checks.push({
       name: `${account.provider}:${account.label} canonical path`,
       ok: await canonicalStateStillMatches(account),

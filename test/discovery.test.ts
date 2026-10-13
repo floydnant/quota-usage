@@ -58,6 +58,7 @@ describe('directory inventory', () => {
     await mkdir(arbitrary);
     await mkdir(join(home, '.codex-work'));
     await mkdir(join(home, '.claude-work'));
+    await mkdir(join(home, '.claude'));
     await symlink(arbitrary, join(home, '.codex-alias'), 'junction');
     const registered: AccountConfig[] = [
       {
