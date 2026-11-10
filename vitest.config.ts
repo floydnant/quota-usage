@@ -5,6 +5,8 @@ export default defineConfig({
     environment: 'node',
     fileParallelism: false,
     testTimeout: 15_000,
+    // Keep spawned CLIs inside their temporary HOME on Linux.
+    env: { XDG_CONFIG_HOME: '', XDG_DATA_HOME: '', XDG_CACHE_HOME: '' },
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'json-summary'],

@@ -2,7 +2,7 @@
 
 ## Setup and fast feedback
 
-Use macOS with Node.js 22 or newer:
+Use macOS or Linux with Node.js 22 or newer:
 
 ```sh
 npm ci
@@ -38,6 +38,8 @@ status-line configuration, or quota endpoints. Follow existing patterns:
 - Spawned inert Node children for cleanup tests; explicitly terminate any
   foreign control child created by a test.
 - Pack into a temporary directory, install there, and execute the installed bin.
+- On Linux, spawned CLIs stay inside their temporary home only because
+  `vitest.config.ts` blanks the XDG base-directory variables; keep that in place.
 
 The high-value test files are:
 
@@ -54,6 +56,8 @@ The high-value test files are:
 | Directory inventory                     | `test/discovery.test.ts`, `test/discovery-cli.test.ts`, `test/collect.test.ts` |
 | Human/JSON contracts                    | `test/render.test.ts`, `test/tui.test.ts`                                      |
 | Tarball contents and installed bin      | `test/package.test.ts`                                                         |
+| Per-platform locations and XDG          | `test/paths.test.ts`                                                           |
+| Trash layouts                           | `test/trash.test.ts`                                                           |
 
 Coverage is configured in `vitest.config.ts`. The branch threshold applies to
 configuration, selectors, cache, process cleanup, and provider adapters; keep

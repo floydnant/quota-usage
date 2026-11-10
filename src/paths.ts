@@ -4,6 +4,8 @@ import { isAbsolute, join, relative, resolve } from 'node:path';
 import { UsageError } from './errors.js';
 import type { Provider } from './types.js';
 
+export type TrashLayout = 'freedesktop' | 'flat';
+
 export interface AppPaths {
   homeDir: string;
   configDir: string;
@@ -14,21 +16,43 @@ export interface AppPaths {
   binDir: string;
   cacheDir: string;
   trashDir: string;
+  trashLayout: TrashLayout;
 }
 
-export function appPaths(home = homedir()): AppPaths {
-  const configDir = join(home, '.config', 'usage');
-  const dataDir = join(home, '.local', 'share', 'usage');
+function xdgBase(env: NodeJS.ProcessEnv, variable: string, fallback: string): string {
+  const value = env[variable];
+  return value && isAbsolute(value) ? value : fallback;
+}
+
+/**
+ * An explicit `home` is a self-contained root: the ambient environment applies
+ * only when the real home directory is used or `env` is passed.
+ */
+export function appPaths(
+  home?: string,
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = home === undefined ? process.env : {},
+): AppPaths {
+  const homeDir = home ?? homedir();
+  const linux = platform === 'linux';
+  const base = (variable: string, fallback: string): string =>
+    linux ? xdgBase(env, variable, fallback) : fallback;
+  const configDir = join(base('XDG_CONFIG_HOME', join(homeDir, '.config')), 'usage');
+  const dataHome = base('XDG_DATA_HOME', join(homeDir, '.local', 'share'));
+  const dataDir = join(dataHome, 'usage');
   return {
-    homeDir: home,
+    homeDir,
     configDir,
     configFile: join(configDir, 'config.yaml'),
     backupFile: join(configDir, 'config.yaml.bak'),
     dataDir,
     managedRoot: join(dataDir, 'accounts'),
     binDir: join(dataDir, 'bin'),
-    cacheDir: join(home, 'Library', 'Caches', 'usage'),
-    trashDir: join(home, '.Trash'),
+    cacheDir: linux
+      ? join(base('XDG_CACHE_HOME', join(homeDir, '.cache')), 'usage')
+      : join(homeDir, 'Library', 'Caches', 'usage'),
+    trashDir: linux ? join(dataHome, 'Trash') : join(homeDir, '.Trash'),
+    trashLayout: linux ? 'freedesktop' : 'flat',
   };
 }
 
