@@ -36,6 +36,7 @@ import { childOwned, ProcessTracker, runProcess } from './processes.js';
 import type { Confirm } from './prompt.js';
 import { CodexAdapter, identityHash, maskEmail } from './providers/codex.js';
 import { MIN_CLAUDE_MULTI_ACCOUNT_VERSION } from './providers/claude-live.js';
+import { assertTrashUsable, moveToTrash } from './trash.js';
 import type { AccountConfig, Provider, UsageConfig } from './types.js';
 
 const MARKER_FILE = '.usage-owner';
@@ -383,10 +384,7 @@ export async function removeAccount(
   const config = await store.load();
   const account = findAccount(config, provider, label);
   const messages: string[] = [];
-  if (account.provider === 'claude') {
-    const restored = await restoreClaudeCollector(account);
-    if (restored.drift) messages.push(restored.drift);
-  }
+  const trashLocation = { dir: store.paths.trashDir, layout: store.paths.trashLayout };
   if (options.purge) {
     if (account.ownership !== 'managed') {
       throw new UsageError('invalid_configuration', 'Only managed account state can be purged');
@@ -401,6 +399,22 @@ export async function removeAccount(
     if (!(await options.confirm(`Log out and move ${account.stateDir} to Trash?`))) {
       throw new UsageError('invalid_configuration', 'Purge was not confirmed');
     }
+    try {
+      await assertTrashUsable(account.stateDir, trashLocation);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new UsageError(
+        'invalid_configuration',
+        `Could not use Trash ${store.paths.trashDir} (${reason}). The account was not logged out and its directory was not moved.`,
+        { cause: error },
+      );
+    }
+  }
+  if (account.provider === 'claude') {
+    const restored = await restoreClaudeCollector(account);
+    if (restored.drift) messages.push(restored.drift);
+  }
+  if (options.purge) {
     const tracker = options.tracker ?? new ProcessTracker();
     const executable = await resolveExecutable(
       provider,
@@ -421,9 +435,21 @@ export async function removeAccount(
     if (logout.code !== 0) {
       throw new UsageError('provider_failure', `${provider} logout failed; state was not moved`);
     }
-    await ensurePrivateDir(store.paths.trashDir);
-    const trash = join(store.paths.trashDir, `usage-${provider}-${label}-${randomUUID()}`);
-    await rename(account.stateDir, trash);
+    let trash: string;
+    try {
+      trash = await moveToTrash(
+        account.stateDir,
+        `usage-${provider}-${label}-${randomUUID()}`,
+        trashLocation,
+      );
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new UsageError(
+        'provider_failure',
+        `${provider} logout succeeded and was not undone, but the state could not be moved to Trash (${reason}). ${selector} is still registered.`,
+        { cause: error },
+      );
+    }
     messages.push(`Moved ${account.stateDir} to ${trash}; it is recoverable from Trash.`);
   }
   const accounts = config.accounts.filter(
@@ -438,7 +464,9 @@ export async function removeAccount(
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     });
   }
-  messages.push(`Removed ${selector} from configuration; vendor credentials were left untouched.`);
+  messages.push(
+    `Removed ${selector} from configuration${options.purge ? '.' : '; vendor credentials were left untouched.'}`,
+  );
   return { messages };
 }
 

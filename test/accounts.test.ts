@@ -3,13 +3,14 @@ import {
   lstat,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   realpath,
   symlink,
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   addAccount,
@@ -19,7 +20,7 @@ import {
   restoreClaudeCollector,
 } from '../src/accounts.js';
 import { ConfigStore, DEFAULT_CONFIG } from '../src/config.js';
-import { appPaths } from '../src/paths.js';
+import { appPaths, type AppPaths } from '../src/paths.js';
 import type { AccountConfig, UsageConfig } from '../src/types.js';
 
 async function setup(): Promise<ConfigStore> {
@@ -235,5 +236,201 @@ describe('removal and purge guards', () => {
         () => false,
       ),
     ).toBe(false);
+  });
+
+  async function managedClaudeWithCollector(given?: ConfigStore): Promise<{
+    store: ConfigStore;
+    settings: string;
+  }> {
+    const store = given ?? (await setup());
+    const stateDir = join(store.paths.managedRoot, 'claude', 'work');
+    await mkdir(stateDir, { recursive: true });
+    await writeFile(join(stateDir, '.usage-owner'), JSON.stringify({ id: 'marker' }), {
+      mode: 0o600,
+    });
+    const settings = join(stateDir, 'settings.json');
+    await writeFile(settings, '{}');
+    const account = await installClaudeCollector(
+      {
+        provider: 'claude',
+        label: 'work',
+        stateDir,
+        ownership: 'managed',
+        ownershipMarker: 'marker',
+      },
+      store,
+      async () => true,
+    );
+    await store.write({ ...DEFAULT_CONFIG, accounts: [account] }, false);
+    return { store, settings };
+  }
+
+  it('keeps the Claude collector when the purge guards refuse', async () => {
+    const { store, settings } = await managedClaudeWithCollector();
+    const installed = await statusLineCommand(settings);
+    expect(installed).toContain('claude-statusline');
+    await writeFile(join(dirname(settings), '.usage-owner'), JSON.stringify({ id: 'other' }));
+
+    await expect(
+      removeAccount(store, 'claude:work', { purge: true, confirm: async () => true }),
+    ).rejects.toThrow('Ownership marker');
+
+    expect(await statusLineCommand(settings)).toBe(installed);
+  });
+
+  it('keeps the Claude collector when the purge is not confirmed', async () => {
+    const { store, settings } = await managedClaudeWithCollector();
+    const installed = await statusLineCommand(settings);
+
+    await expect(
+      removeAccount(store, 'claude:work', { purge: true, confirm: async () => false }),
+    ).rejects.toThrow('not confirmed');
+
+    expect(await statusLineCommand(settings)).toBe(installed);
+  });
+
+  async function managedCodexOnLinux(
+    logoutScript: (paths: AppPaths) => string,
+  ): Promise<{ store: ConfigStore; stateDir: string }> {
+    const home = await realpath(await mkdtemp(join(tmpdir(), 'accounts-')));
+    const store = new ConfigStore(appPaths(home, 'linux', {}));
+    const stateDir = join(store.paths.managedRoot, 'codex', 'personal');
+    await mkdir(stateDir, { recursive: true });
+    await writeFile(join(stateDir, '.usage-owner'), JSON.stringify({ id: 'marker' }), {
+      mode: 0o600,
+    });
+    const fake = join(store.paths.dataDir, 'codex');
+    await writeFile(fake, `#!/bin/sh\n${logoutScript(store.paths)}\nexit 0\n`);
+    await chmod(fake, 0o700);
+    await store.write(
+      {
+        ...DEFAULT_CONFIG,
+        defaults: { ...DEFAULT_CONFIG.defaults, codexExecutable: fake },
+        accounts: [
+          {
+            provider: 'codex',
+            label: 'personal',
+            stateDir,
+            ownership: 'managed',
+            ownershipMarker: 'marker',
+          },
+        ],
+      },
+      false,
+    );
+    return { store, stateDir };
+  }
+
+  it('refuses an unusable Linux trash before logging out', async () => {
+    const { store, stateDir } = await managedCodexOnLinux(
+      (paths) => `: > '${paths.dataDir}/logged-out'`,
+    );
+    await mkdir(dirname(store.paths.trashDir), { recursive: true });
+    await writeFile(store.paths.trashDir, 'a file where the trash directory should be');
+
+    const failure = removeAccount(store, 'codex:personal', {
+      purge: true,
+      confirm: async () => true,
+    });
+
+    await expect(failure).rejects.toThrow('was not logged out');
+    await expect(failure).rejects.toThrow('was not moved');
+    await expect(lstat(join(store.paths.dataDir, 'logged-out'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    expect((await lstat(stateDir)).isDirectory()).toBe(true);
+    expect((await store.load()).accounts).toHaveLength(1);
+  });
+
+  it('keeps the Claude collector when the Linux trash is unusable', async () => {
+    const home = await realpath(await mkdtemp(join(tmpdir(), 'accounts-')));
+    const paths = appPaths(home, 'linux', {});
+    const { store, settings } = await managedClaudeWithCollector(new ConfigStore(paths));
+    const installed = await statusLineCommand(settings);
+    await mkdir(dirname(paths.trashDir), { recursive: true });
+    await writeFile(paths.trashDir, 'a file where the trash directory should be');
+
+    await expect(
+      removeAccount(store, 'claude:work', { purge: true, confirm: async () => true }),
+    ).rejects.toThrow('was not logged out');
+
+    expect(await statusLineCommand(settings)).toBe(installed);
+  });
+
+  it('explains the state left behind when the move fails after logout', async () => {
+    const { store, stateDir } = await managedCodexOnLinux(
+      (paths) => `rm -rf '${paths.trashDir}'; : > '${paths.trashDir}'`,
+    );
+
+    const failure = removeAccount(store, 'codex:personal', {
+      purge: true,
+      confirm: async () => true,
+    });
+
+    await expect(failure).rejects.toThrow('codex logout succeeded and was not undone');
+    await expect(failure).rejects.toThrow('codex:personal is still registered');
+    await expect(failure).rejects.not.toThrow('still in place');
+    expect((await lstat(stateDir)).isDirectory()).toBe(true);
+    expect((await store.load()).accounts).toHaveLength(1);
+  });
+
+  async function purgeManagedAccount(
+    platform: NodeJS.Platform,
+  ): Promise<{ home: string; stateDir: string; messages: string[] }> {
+    const home = await realpath(await mkdtemp(join(tmpdir(), 'accounts-')));
+    const store = new ConfigStore(appPaths(home, platform, {}));
+    const stateDir = join(store.paths.managedRoot, 'codex', 'personal');
+    await mkdir(stateDir, { recursive: true });
+    await writeFile(join(stateDir, '.usage-owner'), JSON.stringify({ id: 'marker' }), {
+      mode: 0o600,
+    });
+    const fake = join(store.paths.dataDir, 'codex');
+    await writeFile(fake, '#!/bin/sh\nexit 0\n');
+    await chmod(fake, 0o700);
+    await store.write(
+      {
+        ...DEFAULT_CONFIG,
+        defaults: { ...DEFAULT_CONFIG.defaults, codexExecutable: fake },
+        accounts: [
+          {
+            provider: 'codex',
+            label: 'personal',
+            stateDir,
+            ownership: 'managed',
+            ownershipMarker: 'marker',
+          },
+        ],
+      },
+      false,
+    );
+    const { messages } = await removeAccount(store, 'codex:personal', {
+      purge: true,
+      confirm: async () => true,
+    });
+    return { home, stateDir, messages };
+  }
+
+  it('purges into the freedesktop trash layout on Linux', async () => {
+    const { home, messages } = await purgeManagedAccount('linux');
+    const trash = join(home, '.local', 'share', 'Trash');
+
+    const [name] = await readdir(join(trash, 'files'));
+    expect(name).toMatch(/^usage-codex-personal-/);
+    const info = await readFile(join(trash, 'info', `${name}.trashinfo`), 'utf8');
+    const encodedHome = home.split('/').map(encodeURIComponent).join('/');
+    expect(info).toContain(`Path=${encodedHome}/.local/share/usage/accounts/codex/personal\n`);
+    expect(messages.join(' ')).toContain(`to ${join(trash, 'files', name as string)};`);
+    expect(messages.join(' ')).not.toContain('credentials were left untouched');
+    expect(messages.join(' ')).toContain('Removed codex:personal from configuration.');
+  });
+
+  it('purges straight into ~/.Trash on macOS', async () => {
+    const { home, messages } = await purgeManagedAccount('darwin');
+    const trash = join(home, '.Trash');
+
+    const entries = await readdir(trash);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatch(/^usage-codex-personal-/);
+    expect(messages.join(' ')).toContain(`to ${join(trash, entries[0] as string)};`);
   });
 });
