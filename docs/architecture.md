@@ -105,12 +105,19 @@ keys and explicit OAuth-token environment variables are removed in both cases.
 ~/.local/share/usage/                directories 0700
 ~/.local/share/usage/accounts/       managed vendor state
 ~/.local/share/usage/bin/            compiled collector and owner-only backups
-~/Library/Caches/usage/              cache files 0600
+~/Library/Caches/usage/              cache files 0600 (macOS)
+~/.cache/usage/                      cache files 0600 (Linux)
 ```
 
 Managed purge requires the exact expected path, no symlinks, a matching random
 ownership marker, successful official logout, and a collision-safe move to
-macOS Trash. External/default state is never purged.
+the macOS Trash or the freedesktop.org home trash on Linux, where the
+`.trashinfo` file is created exclusively before the move, and write access and
+the filesystem are checked before logout. External/default
+state is never purged.
+
+On Linux, absolute `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, and `XDG_CACHE_HOME`
+values replace the default base directories shown above.
 
 ## Packaging
 

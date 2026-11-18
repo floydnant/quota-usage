@@ -1,12 +1,12 @@
 # quota-usage
 
-`quota-usage` is a macOS command-line tool that reports ChatGPT Codex and Claude Code subscription quota windows across automatically detected and explicitly registered accounts. The executable is named `usage`.
+`quota-usage` is a macOS and Linux command-line tool that reports ChatGPT Codex and Claude Code subscription quota windows across automatically detected and explicitly registered accounts. The executable is named `usage`.
 
 It reports subscription allowance usage, reset times, plan metadata, and provider-supplied credits. It does **not** report API billing, API spend, token costs, or API rate limits. High usage and reached limits are information only; there are no thresholds and no `check` command.
 
 ## Requirements
 
-- macOS on Apple Silicon or Intel
+- macOS on Apple Silicon or Intel, or Linux
 - Node.js 22 or newer
 - The official `codex` and/or `claude` CLI for the providers you use
 - Codex CLI 0.150.1 or newer
@@ -337,9 +337,11 @@ Configuration:  ~/.config/usage/config.yaml
 Backup:         ~/.config/usage/config.yaml.bak
 Managed state:  ~/.local/share/usage/accounts/
 Helper files:   ~/.local/share/usage/bin/
-Cache:          ~/Library/Caches/usage/
+Cache:          ~/Library/Caches/usage/ (macOS), ~/.cache/usage/ (Linux)
 Update state:   ~/.local/share/usage/updates/<checkout-hash>/
 ```
+
+On Linux, absolute `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, and `XDG_CACHE_HOME` values replace `~/.config`, `~/.local/share`, and `~/.cache`. Keep them the same between runs, because registered accounts and the Claude collector store absolute paths derived from them.
 
 Application directories use mode `0700`. Configuration, backup, ownership, collector-backup, and cache files use `0600`. YAML has top-level `schemaVersion: 1`, is completely validated before use, rejects unknown fields with their YAML path, and supports careful manual edits. Writes are atomic and retain one previous backup.
 
@@ -364,7 +366,7 @@ If the user changed Claude's setting afterward, `usage` does not overwrite it. I
 usage accounts remove codex:client --purge
 ```
 
-It refuses default/external state, missing or mismatched ownership markers, symlinks, broad paths, and locations outside the managed root. After confirmation it asks the official vendor CLI to log out under the exact directory. If logout fails, state is not moved. A successful purge moves the directory to macOS Trash with a collision-safe name and reports that it is recoverable. There is no `--force`.
+It refuses default/external state, missing or mismatched ownership markers, symlinks, broad paths, and locations outside the managed root. After confirmation it asks the official vendor CLI to log out under the exact directory. If logout fails, state is not moved. On Linux, the purge stops before logout if the trash directories or the account directory are not writable, or if the trash is on another filesystem. If the move still fails after logout, the logout is not undone, the account stays registered, and the error says so. A successful purge moves the directory to the macOS Trash or, on Linux, to the freedesktop.org home trash (`~/.local/share/Trash`) with a collision-safe name and reports that it is recoverable. There is no `--force`.
 
 Prepare for npm removal with:
 
@@ -427,7 +429,6 @@ Real-account verification is manual only. Do not run it without explicit permiss
 ## Roadmap
 
 - Quota history
-- Linux support
 - Loading animation
 - More providers
 
